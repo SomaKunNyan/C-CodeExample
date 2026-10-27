@@ -34,8 +34,9 @@ require_debian() {
 
 load_config() {
     [[ -r ${CONFIG_FILE} ]] || die "Нет ${CONFIG_FILE}. Выполните: cp config.env.example config.env и отредактируйте."
+    # Убираем \r: config.env мог быть отредактирован в Windows.
     # shellcheck disable=SC1090
-    . "${CONFIG_FILE}"
+    . <(tr -d '\r' < "${CONFIG_FILE}")
 
     : "${VPN_DOMAIN:?}" "${ACME_EMAIL:?}" "${WAN_IF:?}" "${ADMIN_USER:?}"
     : "${SSH_PORT:?}" "${VPN_NET4:?}" "${VPN_GW4:?}" "${MAX_CLIENTS:?}"
@@ -45,7 +46,7 @@ load_config() {
 
     [[ ${VPN_DOMAIN} != vpn.example.com ]] || die "Задайте VPN_DOMAIN в ${CONFIG_FILE}."
     ip link show dev "${WAN_IF}" >/dev/null 2>&1 \
-        || die "Интерфейс WAN_IF=${WAN_IF} не найден. Доступные: $(ip -br link | awk '{print $1}' | xargs)"
+        || die "Интерфейс WAN_IF=$(printf '%q' "${WAN_IF}") не найден (невидимые символы видны как \$'...\\NNN'). Доступные: $(ip -br link | awk '{print $1}' | xargs)"
 
     if [[ -z ${WAN_IPV4} ]]; then
         WAN_IPV4="$(ip -4 -o addr show dev "${WAN_IF}" scope global | awk '{print $4}' | cut -d/ -f1 | head -n1)"
