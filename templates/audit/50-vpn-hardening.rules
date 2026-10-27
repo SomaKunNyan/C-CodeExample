@@ -1,0 +1,27 @@
+## /etc/audit/rules.d/50-vpn-hardening.rules
+## Аудит изменений критичных файлов и привилегированных действий.
+
+## Учётные записи и аутентификация
+-w /etc/passwd -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/sudoers -p wa -k sudoers
+-w /etc/sudoers.d/ -p wa -k sudoers
+-w /etc/ssh/sshd_config -p wa -k sshd
+-w /etc/ssh/sshd_config.d/ -p wa -k sshd
+-w /root/.ssh/ -p wa -k root_ssh
+
+## VPN, сертификаты, firewall
+-w /etc/ocserv/ -p wa -k ocserv
+-w /etc/letsencrypt/live/ -p wa -k tls_certs
+-w /etc/nftables.conf -p wa -k firewall
+-a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k modules
+
+## Вызовы sudo/su и смена времени
+-w /usr/bin/sudo -p x -k priv_exec
+-w /usr/bin/su -p x -k priv_exec
+-a always,exit -F arch=b64 -S adjtimex,settimeofday,clock_settime -k time_change
+
+## Запуск программ от root пользователями (UID>=1000)
+-a always,exit -F arch=b64 -S execve -F euid=0 -F auid>=1000 -F auid!=unset -k root_cmd

@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Тюнинг сетевой карты 40G под маршрутизацию VPN-трафика.
+# Использование: vpn-nic-tune <интерфейс>
+# Все шаги «мягкие»: если драйвер что-то не поддерживает — пропускаем.
+set -uo pipefail
+
+IF=${1:?usage: vpn-nic-tune <iface>}
+say() { echo "vpn-nic-tune[$IF]: $*"; }
+try() { if "$@" >/dev/null 2>&1; then say "ok: ${*:2}"; else say "skip: ${*:2}"; fi; }
+
+# 1. Кольцевые буферы RX/TX — на максимум (меньше дропов при всплесках).
+read -r rx_max tx_max < <(ethtool -g "$IF" 2>/dev/null \
+    | awk '/Pre-set maximums/{f=1} f&&/^RX:/{r=$2} f&&/^TX:/{t=$2; print r, t; exit}')
+[[ -n ${rx_max:-} ]] && try ethtool -G "$IF" rx "$rx_max" tx "$tx_max"
+
+# 2. Очереди (RSS) = числу физических ядер на NUMA-узле карты, но не больше
+#    максимума драйвера. Каждая очередь — своё ядро, трафик клиентов
+#    распределяется по ядрам.
+max_q=$(ethtool -l "$IF" 2>/dev/null | awk '/Pre-set maximums/{f=1} f&&/Combined:/{print $2; exit}')
+numa=$(cat "/sys/class/net/$IF/device/numa_node" 2>/dev/null || echo -1)
+if [[ $numa -ge 0 ]]; then
+    cores=$(lscpu -p=CORE,NODE | grep -v '^#' | awk -F, -v n="$numa" '$2==n{print $1}' | sort -u | wc -l)
+else
+    cores=$(lscpu -p=CORE | grep -v '^#' | sort -u | wc -l)
+fi
+if [[ -n ${max_q:-} && ${max_q} -gt 0 ]]; then
+    q=$(( cores < max_q ? cores : max_q ))
+    try ethtool -L "$IF" combined "$q"
+fi
+
+# 3. Offload'ы: GRO/GSO/TSO — да; LRO — нет (несовместим с маршрутизацией).
+try ethtool -K "$IF" gro on gso on tso on rx on tx on sg on
+try ethtool -K "$IF" lro off
+# Агрегация UDP при форвардинге (ядро >= 5.12) — DTLS-трафик обрабатывается
+# пачками, существенно меньше нагрузка на CPU.
+try ethtool -K "$IF" rx-udp-gro-forwarding on
+# ntuple — для ручного распределения потоков при необходимости.
+try ethtool -K "$IF" ntuple on
+
+# 4. Адаптивная коалесценция прерываний: баланс задержки и pps.
+try ethtool -C "$IF" adaptive-rx on adaptive-tx on
+
+# 5. Длина очереди передачи.
+try ip link set dev "$IF" txqueuelen 10000
+
+# 6. RPS/XPS не нужны при аппаратном RSS, но включаем RFS для локальных
+#    сокетов ocserv (TCP/443).
+echo 32768 > /proc/sys/net/core/rps_sock_flow_entries 2>/dev/null || true
+for rxq in /sys/class/net/"$IF"/queues/rx-*; do
+    echo $(( 32768 / ${q:-1} )) > "$rxq/rps_flow_cnt" 2>/dev/null || true
+done
+
+exit 0

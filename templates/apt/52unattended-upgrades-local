@@ -1,0 +1,14 @@
+// /etc/apt/apt.conf.d/52unattended-upgrades-local
+// Автоматическая установка обновлений безопасности Debian.
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Debian,codename=${distro_codename},label=Debian-Security";
+        "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+        "origin=Debian,codename=${distro_codename}-updates";
+};
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+// Перезагрузку ядра делаем сами в окно обслуживания (VPN не должен падать
+// посреди дня). Включите true + время, если предпочитаете автоматику.
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+Unattended-Upgrade::SyslogEnable "true";
