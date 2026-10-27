@@ -37,13 +37,62 @@ fi
 routes="$(mktemp)"; newconf="$(mktemp)"
 trap 'rm -f "$routes" "$newconf"' EXIT
 
+# Пересылка DNS-запросов к доменам из списка на SPLIT_DNS_FORWARDERS.
+# Нужна для сервисов, чьи DNS-серверы не отвечают на запросы из страны, где
+# стоит VPN-сервер: иначе ни скрипт, ни VPN-клиенты (их DNS — unbound на
+# сервере) не смогут разрешить такие домены. forward-first: если форвардеры
+# недоступны, unbound резолвит сам.
+update_unbound_forward() {
+    local conf=/etc/unbound/unbound.conf.d/split-exclude-forward.conf
+    local tmp domains d a
+    tmp="$(mktemp)"
+    {
+        echo "# Сгенерировано scripts/update-split-routes.sh — не редактировать вручную."
+        if [[ -n ${SPLIT_DNS_FORWARDERS} && -s ${SPLIT_EXCLUDE_FILE} ]]; then
+            domains="$(python3 "${PROJECT_DIR}/scripts/split-routes.py" --list "${SPLIT_EXCLUDE_FILE}" \
+                       --state /dev/null --print-domains 2>/dev/null)"
+            for d in ${domains}; do
+                echo "forward-zone:"
+                echo "    name: \"${d}.\""
+                for a in ${SPLIT_DNS_FORWARDERS}; do echo "    forward-addr: ${a}"; done
+                echo "    forward-first: yes"
+            done
+        fi
+    } > "$tmp"
+
+    if cmp -s "$tmp" "$conf"; then rm -f "$tmp"; return 0; fi
+    backup_file "$conf"
+    install -m 0644 "$tmp" "$conf"; rm -f "$tmp"
+    local msg="DNS: домены из списка пересылаются на ${SPLIT_DNS_FORWARDERS}"
+    [[ -n ${SPLIT_DNS_FORWARDERS} ]] || msg="DNS: пересылка отключена (SPLIT_DNS_FORWARDERS пуст)"
+    if ! unbound-checkconf >/dev/null 2>&1; then
+        warn "unbound-checkconf отверг пересылку DNS (проверьте SPLIT_DNS_FORWARDERS) — отключаю её."
+        echo "# отключено: ошибка конфигурации, см. unbound-checkconf" > "$conf"
+        msg="DNS: пересылка НЕ включена"
+    fi
+    if systemctl is-active --quiet unbound; then
+        systemctl reload unbound
+        sleep 1
+    fi
+    log "$msg"
+}
+
+if [[ -d /etc/unbound/unbound.conf.d ]]; then
+    update_unbound_forward
+fi
+
 if [[ -s ${SPLIT_EXCLUDE_FILE} ]]; then
-    # Резолвим через unbound — тот же DNS, что у VPN-клиентов.
-    resolver=127.0.0.1
-    dig +short +time=2 +tries=1 debian.org @127.0.0.1 >/dev/null 2>&1 || resolver=""
+    # Резолвим через unbound (как VPN-клиенты) и напрямую через форвардеры.
+    resolvers=()
+    if dig +short +time=2 +tries=1 debian.org @127.0.0.1 >/dev/null 2>&1; then
+        resolvers+=(--resolver 127.0.0.1)
+    else
+        resolvers+=(--resolver system)
+    fi
+    for a in ${SPLIT_DNS_FORWARDERS}; do resolvers+=(--resolver "$a"); done
 
     py_args=(--list "${SPLIT_EXCLUDE_FILE}" --state "${STATE_FILE}"
-             --resolver "${resolver}" --v4-prefix "${SPLIT_V4_PREFIX}"
+             "${resolvers[@]}" --v4-prefix "${SPLIT_V4_PREFIX}"
              --v6-prefix "${SPLIT_V6_PREFIX}" --keep-days "${SPLIT_KEEP_DAYS}"
              --max-routes "${SPLIT_MAX_ROUTES}" --protect "${VPN_NET4}"
              --protect "${WAN_IPV4}/32")

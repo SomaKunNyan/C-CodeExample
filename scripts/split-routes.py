@@ -2,8 +2,9 @@
 """Превращает список доменов/сетей в строки `no-route = ...` для ocserv.
 
 Вызывается из update-split-routes.sh. Домены разрешаются через тот же
-резолвер, что и у VPN-клиентов (unbound на сервере), поэтому клиенты получают
-те же адреса, что исключены из туннеля. Адреса, увиденные за последние
+резолвер, что и у VPN-клиентов (unbound на сервере, который пересылает эти
+домены на SPLIT_DNS_FORWARDERS), и дополнительно напрямую через форвардеры.
+Результаты объединяются. Адреса, увиденные за последние
 --keep-days дней, сохраняются в --state: CDN часто меняют IP, и без этого
 исключение «мигало» бы между обновлениями.
 
@@ -55,7 +56,7 @@ def parse_list(path):
 
 def resolve(name, rtype, resolver):
     cmd = ["dig", "+short", "+time=2", "+tries=2", rtype, name]
-    if resolver:
+    if resolver != "system":
         cmd.append(f"@{resolver}")
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=15, check=False).stdout
@@ -90,7 +91,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", required=True)
     ap.add_argument("--state", required=True)
-    ap.add_argument("--resolver", default="127.0.0.1")
+    ap.add_argument("--resolver", action="append", default=[],
+                    help="DNS-сервер (можно несколько; 'system' — системный)")
+    ap.add_argument("--print-domains", action="store_true",
+                    help="только вывести нормализованный список доменов и выйти")
     ap.add_argument("--v4-prefix", type=int, default=24)
     ap.add_argument("--v6-prefix", type=int, default=48)
     ap.add_argument("--keep-days", type=float, default=7)
@@ -101,6 +105,10 @@ def main():
     args = ap.parse_args()
 
     domains, nets = parse_list(args.list)
+    if args.print_domains:
+        print("\n".join(domains))
+        return 0
+    resolvers = args.resolver or ["system"]
     protect = [ipaddress.ip_network(p, strict=False) for p in args.protect if p]
 
     now = time.time()
@@ -111,9 +119,11 @@ def main():
 
     for d in domains:
         seen = {ip: ts for ip, ts in old.get(d, {}).items() if now - ts < ttl}
-        fresh = [ip for t in rtypes for ip in resolve(d, t, args.resolver)]
+        fresh = {ip for r in resolvers for t in rtypes for ip in resolve(d, t, r)}
         if not fresh:
-            warn(f"{d}: не разрешается" + (f", использую {len(seen)} адрес(ов) из кэша" if seen else ""))
+            warn(f"{d}: не разрешается ни через {', '.join(resolvers)}"
+                 + (f" — использую {len(seen)} адрес(ов) из кэша" if seen
+                    else f" — проверьте написание: dig {d} @{resolvers[-1]}"))
         for ip in fresh:
             seen[str(ip)] = now
         state[d] = seen

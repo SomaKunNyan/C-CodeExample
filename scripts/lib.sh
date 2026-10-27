@@ -45,6 +45,8 @@ load_config() {
     : "${VPN_NET6:=}" "${WAN_IPV4:=}" "${ENABLE_OTP:=yes}" "${CAMOUFLAGE_SECRET:=}"
     : "${SPLIT_EXCLUDE_FILE:=${PROJECT_DIR}/split-exclude.txt}" "${SPLIT_V4_PREFIX:=24}"
     : "${SPLIT_V6_PREFIX:=48}" "${SPLIT_KEEP_DAYS:=7}" "${SPLIT_MAX_ROUTES:=200}"
+    # Только если не задан вовсе: пустое значение в config.env отключает пересылку.
+    : "${SPLIT_DNS_FORWARDERS=77.88.8.8 77.88.8.1}"
 
     [[ ${VPN_DOMAIN} != vpn.example.com ]] || die "Задайте VPN_DOMAIN в ${CONFIG_FILE}."
     ip link show dev "${WAN_IF}" >/dev/null 2>&1 \
