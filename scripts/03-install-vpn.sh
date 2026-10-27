@@ -89,6 +89,12 @@ ocserv -t -c /etc/ocserv/ocserv.conf >/dev/null || die "ocserv -t: ошибка 
 
 install_file "${TEMPLATES_DIR}/systemd/ocserv-override.conf" /etc/systemd/system/ocserv.service.d/override.conf
 
+# Аудит изменений конфигурации VPN и сертификатов (каталоги уже существуют).
+if [[ -d /etc/audit/rules.d ]]; then
+    install_file "${TEMPLATES_DIR}/audit/60-vpn-ocserv.rules" /etc/audit/rules.d/60-vpn-ocserv.rules 0640
+    augenrules --load >/dev/null || warn "augenrules: правила аудита VPN не загрузились (auditctl -l)"
+fi
+
 # --- 4. DNS-резолвер для клиентов -----------------------------------------------
 log "unbound (DNS для VPN-клиентов, DNSSEC)"
 cpus="$(nproc)"

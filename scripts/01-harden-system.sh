@@ -143,8 +143,14 @@ log "journald (постоянное хранение, ротация) и auditd"
 install_file "${TEMPLATES_DIR}/journald/50-vpn.conf" /etc/systemd/journald.conf.d/50-vpn.conf
 systemctl restart systemd-journald
 install_file "${TEMPLATES_DIR}/audit/50-vpn-hardening.rules" /etc/audit/rules.d/50-vpn-hardening.rules 0640
-systemctl enable --now auditd
-augenrules --load >/dev/null || warn "augenrules: не удалось загрузить правила (проверьте auditctl -l)"
+# Сбой аудита не должен прерывать остальной hardening (fail2ban, AppArmor...).
+systemctl enable auditd || warn "auditd: не удалось включить автозапуск"
+if systemctl restart auditd && augenrules --load >/dev/null; then
+    log "  auditd: загружено правил: $(auditctl -l | grep -vc '^No rules')"
+else
+    warn "auditd не запустился или правила не загрузились — продолжаю без него."
+    warn "  Диагностика: systemctl --failed; journalctl -b -u auditd -u audit-rules --no-pager"
+fi
 
 # --- 9. fail2ban -------------------------------------------------------------
 log "fail2ban для SSH"

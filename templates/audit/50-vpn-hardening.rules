@@ -12,9 +12,9 @@
 -w /etc/ssh/sshd_config.d/ -p wa -k sshd
 -w /root/.ssh/ -p wa -k root_ssh
 
-## VPN, сертификаты, firewall
--w /etc/ocserv/ -p wa -k ocserv
--w /etc/letsencrypt/live/ -p wa -k tls_certs
+## Firewall и модули ядра
+## (правила для /etc/ocserv и сертификатов — в 60-vpn-ocserv.rules, их ставит
+##  03-install-vpn.sh: auditctl отвергает наблюдение за несуществующим каталогом)
 -w /etc/nftables.conf -p wa -k firewall
 -a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k modules
 
