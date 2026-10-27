@@ -89,6 +89,13 @@ ${OCSERV_IPV6_LINES}
 
 # Весь трафик клиента — в туннель (full tunnel), DNS — только через VPN.
 route = default
+
+# Исключения из туннеля (split exclude): сети, к которым клиент ходит напрямую.
+# Блок между маркерами генерирует scripts/update-split-routes.sh из списка
+# доменов (split-exclude.txt). Не редактируйте вручную — правки пропадут.
+# >>> split-exclude
+# <<< split-exclude
+
 tunnel-all-dns = true
 dns = ${VPN_GW4}
 

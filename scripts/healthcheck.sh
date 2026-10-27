@@ -54,6 +54,9 @@ echo "== DNS для клиентов"
 chk "unbound резолвит и валидирует DNSSEC" bash -c "dig +short +dnssec @127.0.0.1 debian.org A | grep -q ."
 
 echo "== VPN"
+chk "таймер исключений split-exclude" systemctl is-active --quiet vpn-split-routes.timer
+nr=$(grep -c '^no-route' /etc/ocserv/ocserv.conf 2>/dev/null || true)
+ok "исключений из туннеля (no-route): ${nr:-0}"
 users=$(occtl -j show users 2>/dev/null | jq length 2>/dev/null || echo "?")
 ok "подключено пользователей: ${users}"
 occtl show status 2>/dev/null | grep -E 'Up since|Active sessions|Total sessions|Server PID' | sed 's/^/        /'

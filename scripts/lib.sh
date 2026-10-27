@@ -43,6 +43,8 @@ load_config() {
     : "${MAX_SAME_CLIENTS:?}" "${VPN_MTU:?}"
     : "${ADMIN_SSH_PUBKEY:=}" "${SSH_ALLOW_FROM:=}" "${SSH_FROM_VPN:=yes}"
     : "${VPN_NET6:=}" "${WAN_IPV4:=}" "${ENABLE_OTP:=yes}" "${CAMOUFLAGE_SECRET:=}"
+    : "${SPLIT_EXCLUDE_FILE:=${PROJECT_DIR}/split-exclude.txt}" "${SPLIT_V4_PREFIX:=24}"
+    : "${SPLIT_V6_PREFIX:=48}" "${SPLIT_KEEP_DAYS:=7}" "${SPLIT_MAX_ROUTES:=200}"
 
     [[ ${VPN_DOMAIN} != vpn.example.com ]] || die "Задайте VPN_DOMAIN в ${CONFIG_FILE}."
     ip link show dev "${WAN_IF}" >/dev/null 2>&1 \

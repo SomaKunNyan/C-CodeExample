@@ -13,6 +13,7 @@ VPN-сервер поверх **HTTPS** для **Debian 12/13**, рассчит�
 | Аутентификация | пароль + **TOTP** (Google Authenticator, Aegis, FreeOTP), защита от перебора |
 | Скрытность | режим *camouflage*: без секрета в URL сервер выглядит как обычный веб-сайт |
 | DNS клиентов | собственный резолвер unbound с DNSSEC — без DNS-утечек |
+| Split tunnel | белый список доменов/сетей мимо туннеля (`split-exclude.txt`), ежедневное обновление |
 | Firewall | nftables, default-deny, SNAT, MSS clamping, изоляция клиентов |
 | Hardening ОС | SSH только по ключам, fail2ban, auditd, AppArmor, sysctl, автообновления безопасности |
 | 40G | BBR + fq, буферы, conntrack, RSS-очереди NIC, ring buffers, UDP GRO forwarding |
@@ -84,6 +85,7 @@ VPN-сервер поверх **HTTPS** для **Debian 12/13**, рассчит�
 ```
 ├── install.sh                     # полная установка (шаги 01–04)
 ├── config.env.example             # все параметры проекта
+├── split-exclude.example.txt      # пример списка доменов мимо туннеля
 ├── scripts/
 │   ├── lib.sh                     # общие функции
 │   ├── 01-harden-system.sh        # hardening Debian
@@ -92,6 +94,8 @@ VPN-сервер поверх **HTTPS** для **Debian 12/13**, рассчит�
 │   ├── 04-tune-performance.sh     # sysctl, NIC, CPU под 40G
 │   ├── vpn-nic-tune               # тюнинг NIC (запускается systemd при загрузке)
 │   ├── vpn-user.sh                # управление пользователями VPN
+│   ├── update-split-routes.sh     # исключения из туннеля по списку доменов
+│   ├── split-routes.py            # разрешение доменов и склейка подсетей
 │   └── healthcheck.sh             # проверка состояния (код возврата для мониторинга)
 ├── templates/                     # шаблоны конфигураций (ocserv, nftables, sshd, sysctl, ...)
 └── docs/
@@ -99,7 +103,8 @@ VPN-сервер поверх **HTTPS** для **Debian 12/13**, рассчит�
     ├── 02-vpn-server.md           # развёртывание VPN — весь процесс
     ├── 03-performance-40g.md      # производительность на 40 Гбит/с
     ├── 04-clients.md              # настройка клиентов
-    └── 05-operations.md           # эксплуатация, мониторинг, обновления, диагностика
+    ├── 05-operations.md           # эксплуатация, мониторинг, обновления, диагностика
+    └── 06-split-tunneling.md      # домены и сети мимо туннеля
 ```
 
 ## Проверено

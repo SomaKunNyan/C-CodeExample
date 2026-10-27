@@ -2,3 +2,4 @@
 config.env
 *.tar.gz
 *.gpg
+split-exclude.txt

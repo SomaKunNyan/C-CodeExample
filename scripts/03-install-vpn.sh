@@ -111,6 +111,17 @@ unbound-checkconf >/dev/null || die "unbound-checkconf: ошибка конфи�
 systemctl daemon-reload
 systemctl enable unbound ocserv
 systemctl restart unbound
+
+# Исключения из туннеля по списку доменов (split-exclude.txt) + ежедневный таймер.
+log "Исключения из туннеля (split exclude)"
+bash "${PROJECT_DIR}/scripts/update-split-routes.sh" --no-reload \
+    || warn "Исключения не применены — VPN работает в режиме «весь трафик в туннель»."
+export PROJECT_DIR
+render "${TEMPLATES_DIR}/systemd/vpn-split-routes.service.tpl" /etc/systemd/system/vpn-split-routes.service 0644 PROJECT_DIR
+install_file "${TEMPLATES_DIR}/systemd/vpn-split-routes.timer" /etc/systemd/system/vpn-split-routes.timer
+systemctl daemon-reload
+systemctl enable --now vpn-split-routes.timer
+
 systemctl restart ocserv
 sleep 2
 systemctl is-active --quiet ocserv || { journalctl -u ocserv -n 50 --no-pager; die "ocserv не запустился"; }
