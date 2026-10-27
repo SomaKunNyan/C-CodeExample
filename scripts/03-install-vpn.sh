@@ -33,11 +33,24 @@ fi
 systemctl stop ocserv 2>/dev/null || true
 
 if [[ ! -f /etc/letsencrypt/live/${VPN_DOMAIN}/fullchain.pem ]]; then
+    certbot_args=(certonly --standalone --preferred-challenges http
+                  --non-interactive --agree-tos -m "${ACME_EMAIL}"
+                  --key-type ecdsa --elliptic-curve secp256r1 -d "${VPN_DOMAIN}")
+    acme_hint="Частые причины (точная — в строке 'Detail:' выше):
+    * 'DNS problem: NXDOMAIN'        — нет A-записи ${VPN_DOMAIN} или она ещё не разошлась;
+    * 'Timeout during connect'       — TCP/80 закрыт (firewall/anti-DDoS хостера);
+    * 'Connection refused'           — A-запись указывает на другой IP;
+    * 'Invalid response ... 404'     — A или AAAA указывает на чужой сервер (заглушка регистратора);
+    * 'too many failed authorizations' — лимит Let's Encrypt, подождите час.
+  Проверка: dig +short A ${VPN_DOMAIN} @1.1.1.1; dig +short AAAA ${VPN_DOMAIN} @1.1.1.1 (IP сервера: ${WAN_IPV4})"
+
+    # Пробный выпуск на тестовом сервере LE: не расходует лимиты боевого
+    # (5 неудачных проверок в час), поэтому ошибки DNS/порта 80 ловим здесь.
+    log "Пробная проверка домена ${VPN_DOMAIN} (Let's Encrypt staging)"
+    certbot "${certbot_args[@]}" --dry-run || die "Пробная проверка не прошла. ${acme_hint}"
+
     log "Выпуск сертификата Let's Encrypt для ${VPN_DOMAIN} (ECDSA P-256)"
-    certbot certonly --standalone --preferred-challenges http \
-        --non-interactive --agree-tos -m "${ACME_EMAIL}" \
-        --key-type ecdsa --elliptic-curve secp256r1 \
-        -d "${VPN_DOMAIN}"
+    certbot "${certbot_args[@]}" || die "Сертификат не выпущен. ${acme_hint}"
 else
     log "Сертификат для ${VPN_DOMAIN} уже есть"
 fi
