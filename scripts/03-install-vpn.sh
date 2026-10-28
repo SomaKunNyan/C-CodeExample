@@ -128,5 +128,5 @@ if [[ -d /etc/audit/rules.d ]]; then
     augenrules --load >/dev/null || warn "augenrules: правила аудита VPN не загрузились (auditctl -l)"
 fi
 
-log "VPN-сервер запущен: VLESS + REALITY на ${VPN_DOMAIN:-${WAN_IPV4}}:${XRAY_PORT}, маскировка под ${dest_host}"
+log "VPN-сервер запущен: VLESS + REALITY на ${PUBLIC_IPV4:-${WAN_IPV4}}:${XRAY_PORT}, маскировка под ${dest_host}"
 log "Добавьте пользователя: sudo ./scripts/vpn-user.sh add <имя>"

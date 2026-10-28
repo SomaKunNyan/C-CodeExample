@@ -42,7 +42,7 @@ VPN-сервер на **Xray: VLESS + REALITY + XTLS Vision** поверх TCP/4
    git clone <URL этого репозитория> /opt/vpn-https-debian
    cd /opt/vpn-https-debian
    cp config.env.example config.env
-   nano config.env      # WAN_IF, SSH-ключ администратора, REALITY_DEST, (VPN_DOMAIN)
+   nano config.env      # WAN_IF, SSH-ключ администратора, REALITY_DEST
    ```
 2. **Запустите установку** (не закрывайте текущую SSH-сессию до проверки входа в новой):
    ```bash

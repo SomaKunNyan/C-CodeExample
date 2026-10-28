@@ -65,7 +65,7 @@ cp config.env.example config.env && chmod 600 config.env
 nano config.env
 ```
 
-Обязательно заполните: `VPN_DOMAIN`, `ACME_EMAIL`, `WAN_IF` (`ip -br link`), `ADMIN_USER`,
+Обязательно заполните: `WAN_IF` (`ip route get 1.1.1.1`), `ADMIN_USER`, `REALITY_DEST`,
 `ADMIN_SSH_PUBKEY`, `SSH_PORT`. Настоятельно рекомендуется `SSH_ALLOW_FROM` — список IP/сетей
 администраторов (офис, bastion, сеть управления ДЦ).
 

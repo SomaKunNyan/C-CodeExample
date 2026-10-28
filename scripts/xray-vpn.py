@@ -9,7 +9,7 @@
 Параметры сервера берутся из переменных окружения (их экспортирует lib.sh
 из config.env): XRAY_PORT, REALITY_DEST, REALITY_SERVER_NAMES, VPN_DOMAIN,
 WAN_IPV4, WAN_IPV6, BLOCK_BITTORRENT, XRAY_ACCESS_LOG, XRAY_LOGLEVEL, XRAY_API_PORT,
-CLIENT_FINGERPRINT, SPLIT_EXCLUDE_FILE, CLIENT_DIRECT_RU.
+CLIENT_FINGERPRINT, SPLIT_EXCLUDE_FILE, CLIENT_DIRECT_RU, PUBLIC_IPV4, LINK_ADDRESS.
 
 Команды:
     server                      конфиг сервера -> stdout
@@ -126,7 +126,7 @@ def build_server():
     # Клиентам VPN нельзя ходить на адреса самого сервера (иначе они попадут
     # на SSH/unbound в обход firewall). Частные сети Xray блокирует для VLESS
     # сам (встроенное правило freedom), здесь добавляем публичные IP сервера.
-    own_ips = [f"{ip}/32" for ip in env("WAN_IPV4", "").split() if ip]
+    own_ips = sorted({f"{ip}/32" for ip in (env("WAN_IPV4", ""), env("PUBLIC_IPV4", "")) if ip})
     own_ips += [f"{ip}/128" for ip in env("WAN_IPV6", "").split() if ip]
     final_rules = [{"action": "block", "network": "tcp", "port": "25"}]
     if own_ips:
@@ -210,13 +210,13 @@ def build_server():
 
 def client_params(u):
     k = keys()
-    host = env("VPN_DOMAIN") or env("WAN_IPV4", required=True)
-    try:
+    if env("LINK_ADDRESS", "ip") == "domain":
+        host = env("VPN_DOMAIN") or die("LINK_ADDRESS=domain, но VPN_DOMAIN не задан (config.env)")
+    else:
+        host = env("PUBLIC_IPV4") or env("WAN_IPV4", required=True)
         if not ipaddress.ip_address(host).is_global:
-            die(f"адрес сервера {host} — внутренний (VPS за NAT хостера). Задайте в config.env "
-                "VPN_DOMAIN или публичный IP в WAN_IPV4.")
-    except ValueError:
-        pass  # домен
+            die(f"адрес сервера {host} — внутренний (VPS за NAT хостера), а публичный определить "
+                "не удалось. Впишите его в config.env: PUBLIC_IPV4=\"x.x.x.x\"")
     return {
         "host": host,
         "port": int(env("XRAY_PORT", "443")),

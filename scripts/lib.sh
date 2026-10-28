@@ -32,6 +32,11 @@ require_debian() {
     esac
 }
 
+# Публичный (маршрутизируемый в интернете) IP-адрес? Пустая строка — нет.
+is_global_ip() {
+    [[ -n ${1:-} ]] && python3 -c 'import ipaddress,sys; sys.exit(0 if ipaddress.ip_address(sys.argv[1]).is_global else 1)' "$1" 2>/dev/null
+}
+
 load_config() {
     [[ -r ${CONFIG_FILE} ]] || die "Нет ${CONFIG_FILE}. Выполните: cp config.env.example config.env и отредактируйте."
     # Убираем \r: config.env мог быть отредактирован в Windows.
@@ -43,7 +48,7 @@ load_config() {
     : "${XRAY_VERSION:=latest}" "${XRAY_PORT:=443}" "${XRAY_API_PORT:=10085}"
     : "${REALITY_DEST:=}" "${REALITY_SERVER_NAMES:=}" "${CLIENT_FINGERPRINT:=chrome}"
     : "${BLOCK_BITTORRENT:=yes}" "${XRAY_ACCESS_LOG:=no}" "${CLIENT_DIRECT_RU:=no}"
-    : "${XRAY_LOGLEVEL:=warning}"
+    : "${XRAY_LOGLEVEL:=warning}" "${PUBLIC_IPV4:=}" "${LINK_ADDRESS:=ip}"
     : "${SPLIT_EXCLUDE_FILE:=${PROJECT_DIR}/split-exclude.txt}"
 
     ip link show dev "${WAN_IF}" >/dev/null 2>&1 \
@@ -52,8 +57,23 @@ load_config() {
     if [[ -z ${WAN_IPV4} ]]; then
         WAN_IPV4="$(ip -4 -o addr show dev "${WAN_IF}" scope global | awk '{print $4}' | cut -d/ -f1 | head -n1)"
         [[ -n ${WAN_IPV4} ]] || die "Не удалось определить IPv4 на ${WAN_IF}; задайте WAN_IPV4."
-        if python3 -c 'import ipaddress,sys; sys.exit(ipaddress.ip_address(sys.argv[1]).is_global)' "${WAN_IPV4}"; then
-            warn "На ${WAN_IF} внутренний адрес ${WAN_IPV4} (VPS за NAT хостера): укажите публичный IP в WAN_IPV4."
+    fi
+
+    # Публичный IPv4 — для ссылок vless://. Если на интерфейсе внутренний адрес
+    # (VPS за NAT хостера), узнаём внешний у публичных сервисов.
+    if [[ -z ${PUBLIC_IPV4} ]]; then
+        if is_global_ip "${WAN_IPV4}"; then
+            PUBLIC_IPV4="${WAN_IPV4}"
+        else
+            local svc ip
+            for svc in https://api.ipify.org https://ifconfig.me/ip https://ipv4.icanhazip.com; do
+                ip="$(curl -4 -fsS --max-time 5 "$svc" 2>/dev/null | tr -d '[:space:]' || true)"
+                if is_global_ip "$ip"; then PUBLIC_IPV4="$ip"; break; fi
+            done
+            if [[ -n ${PUBLIC_IPV4} ]]; then
+                warn "Сервер за NAT (${WAN_IPV4}); публичный IP определён автоматически: ${PUBLIC_IPV4}."
+                warn "  Чтобы не определять каждый раз, впишите в config.env: PUBLIC_IPV4=\"${PUBLIC_IPV4}\""
+            fi
         fi
     fi
     if [[ -z ${WAN_IPV6} ]]; then
@@ -62,7 +82,7 @@ load_config() {
     fi
     export VPN_DOMAIN WAN_IF WAN_IPV4 WAN_IPV6 ADMIN_USER SSH_PORT XRAY_VERSION XRAY_PORT \
            XRAY_API_PORT REALITY_DEST REALITY_SERVER_NAMES CLIENT_FINGERPRINT BLOCK_BITTORRENT \
-           XRAY_ACCESS_LOG XRAY_LOGLEVEL CLIENT_DIRECT_RU SPLIT_EXCLUDE_FILE
+           XRAY_ACCESS_LOG XRAY_LOGLEVEL CLIENT_DIRECT_RU SPLIT_EXCLUDE_FILE PUBLIC_IPV4 LINK_ADDRESS
 }
 
 # Резервная копия файла перед перезаписью.

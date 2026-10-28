@@ -72,7 +72,7 @@ dig +short www.example.fi | head -1 | xargs whois | grep -Ei 'netname|org-name|c
 
 ## 3. Установка — `03-install-vpn.sh`
 
-В `config.env` задайте как минимум `REALITY_DEST` (и `VPN_DOMAIN`, если хотите ссылки с доменом), затем:
+В `config.env` задайте как минимум `REALITY_DEST`, затем:
 ```bash
 sudo ./scripts/03-install-vpn.sh
 ```
@@ -112,6 +112,11 @@ sudo ./scripts/vpn-user.sh reset ivan           # новый UUID: старая 
 sudo ./scripts/vpn-user.sh del ivan
 sudo ./scripts/vpn-user.sh client-config ivan > ivan.json   # полный JSON с исключениями (см. 06)
 ```
+
+В ссылке адресом сервера стоит его **публичный IP** (`LINK_ADDRESS="ip"`, по умолчанию): подключение
+не зависит от DNS у клиента. Если VPS за NAT хостера (на интерфейсе `192.168.x.x`), публичный IP
+определяется автоматически; надёжнее вписать его в `PUBLIC_IPV4`. Ссылки с доменом —
+`LINK_ADDRESS="domain"` + `VPN_DOMAIN`.
 
 Ссылка `vless://…` — это и есть доступ: передавайте её только владельцу по защищённому каналу. Если
 ссылка утекла — `reset`. Изменение пользователей перезапускает Xray (≈1 с): клиенты переподключаются

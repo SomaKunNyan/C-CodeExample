@@ -59,7 +59,7 @@ sudo ./scripts/03-install-vpn.sh     # Xray, REALITY_DEST, unbound
 sudo ./scripts/02-firewall.sh        # nftables (порт Xray, SSH)
 ```
 Ключи REALITY и пользователи сохраняются — ссылки у клиентов остаются рабочими. Если поменяли
-`REALITY_DEST`/`REALITY_SERVER_NAMES`/`VPN_DOMAIN`/`XRAY_PORT` — у клиентов поменяется ссылка:
+`REALITY_DEST`/`REALITY_SERVER_NAMES`/`LINK_ADDRESS`/`PUBLIC_IPV4`/`VPN_DOMAIN`/`XRAY_PORT` — у клиентов поменяется ссылка:
 раздайте новые (`vpn-user.sh link <имя>`).
 
 ## Обновление Xray
@@ -81,10 +81,11 @@ sudo ./scripts/03-install-vpn.sh      # XRAY_VERSION="latest" — постави
    новый сервер за минуту).
 2. Перенесите `config.env`, `split-exclude.txt` и резервную копию `/etc/xray` (раздел ниже),
    разверните проект — **ключи и UUID те же, ссылки клиентов не меняются**.
-3. Если клиенты подключаются по домену (`VPN_DOMAIN`) — поменяйте A-запись (TTL 300), и всё.
-   Если по IP — раздайте новые ссылки.
+3. По умолчанию ссылки содержат IP (`LINK_ADDRESS="ip"`): раздайте новые ссылки
+   (`vpn-user.sh link <имя>`). Если используете `LINK_ADDRESS="domain"` — достаточно поменять
+   A-запись `VPN_DOMAIN` (TTL 300), ссылки клиентов останутся прежними.
 
-Поэтому рекомендуется задавать `VPN_DOMAIN`.
+Домен удобнее при частой смене IP, IP — надёжнее, когда DNS у клиентов отдаёт устаревшие ответы.
 
 ## Перезагрузка и обновление ядра
 
