@@ -83,8 +83,8 @@ apt-get update && apt-get full-upgrade -y
 libpam-pwquality debsums lynis` и утилиты.
 
 ### 4.2. Время
-`timedatectl set-timezone UTC` и `chrony`. Точное время критично: TLS-сертификаты, **TOTP-коды**
-(расхождение > 30 с — коды не принимаются), сопоставление логов при расследовании.
+`timedatectl set-timezone UTC` и `chrony`. Точное время критично: TLS, **REALITY**
+(клиент с сильно расходящимися часами не подключится), сопоставление логов при расследовании.
 
 ### 4.3. Администратор вместо root
 * Создаётся `ADMIN_USER`, добавляется в группу `sudo`, ключ из `ADMIN_SSH_PUBKEY` → `~/.ssh/authorized_keys`.
@@ -137,7 +137,7 @@ ssh -p 2222 -o PubkeyAuthentication=no sysadmin@<IP>   # должно быть: 
 ### 4.7. Автообновления безопасности
 * `unattended-upgrades` ставит обновления из `Debian-Security` и `-updates` ежедневно.
 * `needrestart` автоматически перезапускает службы, использующие обновлённые библиотеки
-  (например, OpenSSL/GnuTLS → ocserv).
+  (например, OpenSSL → unbound). Xray — статический бинарник, его обновляет шаг 03 (см. [05](05-operations.md)).
 * **Автоперезагрузка выключена**: обновления ядра применяются перезагрузкой в окно обслуживания
   (см. [05-operations](05-operations.md)).
 
@@ -145,20 +145,20 @@ ssh -p 2222 -o PubkeyAuthentication=no sysadmin@<IP>   # должно быть: 
 * `journald`: постоянное хранение, сжатие, лимит 2 ГБ, хранение 90 дней.
 * `auditd` с правилами `templates/audit/50-vpn-hardening.rules`: изменения учётных записей, sudoers,
   SSH, **firewall**, загрузка модулей ядра, смена времени, команды от root, запущенные пользователями.
-  Правила для **конфигурации ocserv, сертификатов и DNS** (`60-vpn-ocserv.rules`) ставит шаг 03,
+  Правила для **конфигурации Xray, его бинарника и DNS** (`60-vpn-xray.rules`) ставит шаг 03,
   когда эти каталоги уже созданы: auditd отвергает наблюдение за несуществующим каталогом.
-  Поиск: `ausearch -k ocserv -i`.
+  Поиск: `ausearch -k xray -i`.
 
 ### 4.9. fail2ban
 * Jail `sshd` (backend systemd, действие nftables): 3 ошибки за 10 мин → бан на 1 час, повторные
   нарушители — экспоненциальный рост до 1 недели; jail `recidive` — бан на неделю на все порты.
-* Перебор паролей **VPN** блокирует сам ocserv (`max-ban-score`, см. [02](02-vpn-server.md)) —
-  это надёжнее парсинга логов.
+* Подбирать что-либо у VPN бессмысленно: без 128-битного UUID и ключа REALITY сервер ведёт себя
+  как обычный сайт-маскировка (см. [02](02-vpn-server.md)).
 
 ### 4.10. AppArmor и лишние службы
 AppArmor включён; если присутствуют — отключаются `avahi`, `cups`, `rpcbind`, `exim4`, `bluetooth`,
 `ModemManager`. Посмотреть, что слушает сеть: `ss -tulpn`. В итоге наружу должны смотреть только
-SSH, 80 (ACME), 443/tcp и 443/udp.
+SSH и 443/tcp.
 
 ## 5. Межсетевой экран — `02-firewall.sh`
 
@@ -166,10 +166,12 @@ SSH, 80 (ACME), 443/tcp и 443/udp.
 
 | Цепочка | Разрешено |
 |---|---|
-| `input` | loopback; established/related; ICMP (нужен для PMTU — без него «зависают» соединения); **TCP/443, UDP/443**; TCP/80 (только для Let's Encrypt); DNS 53 — только из туннелей `vpns*`; SSH — с `SSH_ALLOW_FROM` и из VPN, либо всем, но не чаще 6 новых подключений в минуту с адреса |
-| `forward` | из `vpns*` в интернет. **Запрещено:** клиент↔клиент, подмена адреса источника, доступ клиентов в частные сети (внутренняя сеть ДЦ, `10/8`, `172.16/12`, `192.168/16`, `169.254/16`, CGNAT, multicast) |
-| `raw` | UDP/443 не отслеживается conntrack — экономия CPU на 40G |
-| `nat` | SNAT пула VPN на публичный IP (дешевле `masquerade`); NAT66 для IPv6-пула |
+| `input` | loopback; established/related; ICMP (нужен для PMTU — без него «зависают» соединения); **TCP/443** (Xray); SSH — с `SSH_ALLOW_FROM`, либо всем, но не чаще 6 новых подключений в минуту с адреса |
+| `forward` | **ничего**: Xray — прокси, он сам открывает соединения к сайтам с адреса сервера, маршрутизация и NAT не нужны (`ip_forward = 0`) |
+
+Доступ клиентов VPN к частным сетям (внутренняя сеть ДЦ, `10/8`, `192.168/16`, `127/8`...) и к
+публичным адресам самого сервера (SSH, DNS) запрещён в самом Xray (`finalRules` в
+`/etc/xray/config.json`) — иначе клиент мог бы попасть на SSH «изнутри», в обход `SSH_ALLOW_FROM`.
 
 Отброшенные пакеты логируются с ограничением частоты (`journalctl -k | grep nft-`).
 
@@ -177,8 +179,7 @@ SSH, 80 (ACME), 443/tcp и 443/udp.
 подтверждения `yes` 60 секунд. Нет подтверждения — восстанавливаются прежние правила.
 
 **Если хостер предоставляет внешний (сетевой) firewall / anti-DDoS** — разрешите там те же порты:
-`TCP 443`, `UDP 443`, `TCP 80`, `TCP SSH_PORT`. Для UDP/443 убедитесь, что фильтр не режет
-DTLS как «аномальный QUIC».
+`TCP 443` и `TCP SSH_PORT`.
 
 ## 6. Проверка результата
 
@@ -193,8 +194,8 @@ sudo ./scripts/healthcheck.sh
 
 С внешней машины:
 ```bash
-nmap -Pn -p- --min-rate 2000 <IP>          # открыты только 80, 443, SSH_PORT
-nmap -Pn -sU -p 443 <IP>                   # 443/udp open|filtered
+nmap -Pn -p- --min-rate 2000 <IP>          # открыты только 443 и SSH_PORT
+curl -sI --resolve <REALITY_DEST>:443:<IP> https://<REALITY_DEST>/   # ответ настоящего сайта-маскировки
 ```
 
 ## 7. Чек-лист
@@ -203,8 +204,8 @@ nmap -Pn -sU -p 443 <IP>                   # 443/udp open|filtered
 - [ ] ISO Debian проверен по подписи, установлен минимальный набор
 - [ ] Вход только по ключу под `ADMIN_USER`, root по SSH запрещён, пароль root заблокирован
 - [ ] `SSH_ALLOW_FROM` ограничен сетями администраторов
-- [ ] nftables: default drop, наружу только 80/443/SSH
+- [ ] nftables: default drop, наружу только 443/SSH
 - [ ] fail2ban, auditd, AppArmor, chrony, unattended-upgrades активны
 - [ ] Время синхронизировано (`chronyc tracking`)
 - [ ] `lynis` пройден, замечания разобраны
-- [ ] Резервная копия `/etc/ocserv`, `/etc/letsencrypt`, `config.env` сделана (см. [05](05-operations.md))
+- [ ] Резервная копия `/etc/xray`, `config.env` сделана (см. [05](05-operations.md))

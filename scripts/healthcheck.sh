@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  Проверка состояния сервера: службы, порты, сертификат, firewall, нагрузка.
+#  Проверка состояния сервера: службы, порты, REALITY, firewall, нагрузка.
 #  Код возврата 0 = всё в порядке, 1 = есть проблемы (удобно для мониторинга).
 # =============================================================================
 # shellcheck source=scripts/lib.sh
@@ -17,48 +17,46 @@ bad() { printf '  %s[FAIL]%s %s\n' "$c_red" "$c_rst" "$*"; fail=1; }
 chk() { local d=$1; shift; if "$@" >/dev/null 2>&1; then ok "$d"; else bad "$d"; fi; }
 
 echo "== Службы"
-for s in ocserv unbound nftables fail2ban ssh auditd chrony unattended-upgrades; do
+for s in xray unbound nftables fail2ban ssh auditd chrony unattended-upgrades; do
     chk "$s активна" systemctl is-active --quiet "$s"
 done
 
 echo "== Порты"
-chk "TCP/443 (TLS) слушается"   bash -c "ss -Htln 'sport = :443' | grep -q ."
-chk "UDP/443 (DTLS) слушается"  bash -c "ss -Huln 'sport = :443' | grep -q ."
-chk "SSH на порту ${SSH_PORT}"  bash -c "ss -Htln 'sport = :${SSH_PORT}' | grep -q ."
+chk "TCP/${XRAY_PORT} (Xray) слушается"  bash -c "ss -Htln 'sport = :${XRAY_PORT}' | grep -q ."
+chk "SSH на порту ${SSH_PORT}"            bash -c "ss -Htln 'sport = :${SSH_PORT}' | grep -q ."
+chk "API Xray только на localhost"        bash -c "ss -Htln 'sport = :${XRAY_API_PORT}' | grep -q '127.0.0.1:'"
 
-echo "== TLS"
-cert="/etc/letsencrypt/live/${VPN_DOMAIN}/fullchain.pem"
-if [[ -f $cert ]]; then
-    end="$(openssl x509 -enddate -noout -in "$cert" | cut -d= -f2)"
-    days=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
-    if (( days > 14 )); then ok "сертификат действителен ещё ${days} дн."; else bad "сертификат истекает через ${days} дн."; fi
-else
-    bad "сертификат не найден: $cert"
+echo "== REALITY"
+chk "конфигурация Xray валидна" "${XRAY_BIN}" run -test -config "${XRAY_STORE}/config.json"
+if [[ -n ${REALITY_DEST} ]]; then
+    dest_host="${REALITY_DEST%:*}"
+    # Без ключа клиента сервер должен вести себя как сайт-маскировка:
+    # отдавать его настоящий сертификат по TLS 1.3.
+    proto="$(timeout 5 openssl s_client -connect "127.0.0.1:${XRAY_PORT}" -servername "${dest_host}" </dev/null 2>/dev/null \
+             | awk -F': *' '/Protocol *:/{print $2; exit}')"
+    if [[ $proto == TLSv1.3 ]]; then ok "без ключа сервер выглядит как ${dest_host} (TLS 1.3)"
+    else bad "TLS-рукопожатие с маскировкой ${dest_host}: '${proto:-нет ответа}'"; fi
+    chk "сайт-маскировка ${dest_host} доступен с сервера" \
+        timeout 10 curl -s -o /dev/null --http2 "https://${dest_host}/"
 fi
-proto="$(timeout 5 openssl s_client -connect "127.0.0.1:443" -servername "${VPN_DOMAIN}" </dev/null 2>/dev/null | awk -F': *' '/Protocol *:/{print $2; exit}')"
-if [[ $proto == TLSv1.3 ]]; then ok "TLS-рукопожатие: ${proto}"; else bad "TLS-рукопожатие: '${proto:-нет ответа}'"; fi
-chk "TLS 1.1 отвергается" bash -c "! timeout 5 openssl s_client -connect 127.0.0.1:443 -tls1_1 </dev/null 2>/dev/null | grep -q 'Cipher is [A-Z]'"
 
 echo "== Сеть"
-chk "IP forwarding включён"       bash -c "[[ \$(sysctl -n net.ipv4.ip_forward) == 1 ]]"
-chk "BBR"                          bash -c "[[ \$(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]"
-chk "NAT для ${VPN_NET4}"          bash -c "nft list table ip nat | grep -q '${VPN_NET4}'"
-chk "политика input = drop"        bash -c "nft list chain inet filter input | grep -q 'policy drop'"
+chk "BBR"                         bash -c "[[ \$(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]"
+chk "политика input = drop"       bash -c "nft list chain inet filter input | grep -q 'policy drop'"
+chk "маршрутизация выключена"     bash -c "[[ \$(sysctl -n net.ipv4.ip_forward) == 0 ]]"
 ct=$(sysctl -n net.netfilter.nf_conntrack_count 2>/dev/null || echo 0)
 ctmax=$(sysctl -n net.netfilter.nf_conntrack_max 2>/dev/null || echo 1)
 if (( ct * 100 / ctmax < 80 )); then ok "conntrack: ${ct}/${ctmax}"; else bad "conntrack заполнен: ${ct}/${ctmax}"; fi
 drops=$(ethtool -S "${WAN_IF}" 2>/dev/null | awk '/(rx_missed|rx_no_buffer|rx_dropped|discard)/{s+=$2} END{print s+0}')
 ok "NIC ${WAN_IF}: потерянных пакетов (счётчики драйвера) = ${drops}"
 
-echo "== DNS для клиентов"
-chk "unbound резолвит и валидирует DNSSEC" bash -c "dig +short +dnssec @127.0.0.1 debian.org A | grep -q ."
+echo "== DNS"
+chk "unbound резолвит (DNSSEC)" bash -c "dig +short +dnssec @127.0.0.1 debian.org A | grep -q ."
 
 echo "== VPN"
-chk "таймер исключений split-exclude" systemctl is-active --quiet vpn-split-routes.timer
-nr=$(grep -c '^no-route' /etc/ocserv/ocserv.conf 2>/dev/null || true)
-ok "исключений из туннеля (no-route): ${nr:-0}"
-users=$(occtl -j show users 2>/dev/null | jq length 2>/dev/null || echo "?")
-ok "подключено пользователей: ${users}"
-occtl show status 2>/dev/null | grep -E 'Up since|Active sessions|Total sessions|Server PID' | sed 's/^/        /'
+total=$(xray_py users 2>/dev/null | wc -l)
+online=$("${XRAY_BIN}" api statsgetallonlineusers "--server=127.0.0.1:${XRAY_API_PORT}" 2>/dev/null \
+         | jq -r '(.users // []) | length' 2>/dev/null || echo "?")
+ok "пользователей: ${total}, онлайн сейчас: ${online}"
 
 exit $fail

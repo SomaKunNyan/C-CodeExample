@@ -1,0 +1,6 @@
+## /etc/audit/rules.d/60-vpn-xray.rules
+## Устанавливается scripts/03-install-vpn.sh, когда каталоги уже существуют
+## (auditctl отвергает наблюдение за каталогом с несуществующим родителем).
+-w /etc/xray/ -p wa -k xray
+-w /usr/local/bin/xray -p wa -k xray_bin
+-w /etc/unbound/unbound.conf.d/ -p wa -k dns

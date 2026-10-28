@@ -1,5 +1,0 @@
-## /etc/audit/rules.d/60-vpn-ocserv.rules
-## Устанавливается scripts/03-install-vpn.sh, когда каталоги уже существуют.
--w /etc/ocserv/ -p wa -k ocserv
--w /etc/letsencrypt/live/ -p wa -k tls_certs
--w /etc/unbound/unbound.conf.d/ -p wa -k dns

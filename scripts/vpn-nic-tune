@@ -31,8 +31,7 @@ fi
 # 3. Offload'ы: GRO/GSO/TSO — да; LRO — нет (несовместим с маршрутизацией).
 try ethtool -K "$IF" gro on gso on tso on rx on tx on sg on
 try ethtool -K "$IF" lro off
-# Агрегация UDP при форвардинге (ядро >= 5.12) — DTLS-трафик обрабатывается
-# пачками, существенно меньше нагрузка на CPU.
+# Агрегация UDP при форвардинге (ядро >= 5.12): меньше нагрузка на CPU для UDP.
 try ethtool -K "$IF" rx-udp-gro-forwarding on
 # ntuple — для ручного распределения потоков при необходимости.
 try ethtool -K "$IF" ntuple on
@@ -44,7 +43,7 @@ try ethtool -C "$IF" adaptive-rx on adaptive-tx on
 try ip link set dev "$IF" txqueuelen 10000
 
 # 6. RPS/XPS не нужны при аппаратном RSS, но включаем RFS для локальных
-#    сокетов ocserv (TCP/443).
+#    сокетов Xray (TCP/443).
 echo 32768 > /proc/sys/net/core/rps_sock_flow_entries 2>/dev/null || true
 for rxq in /sys/class/net/"$IF"/queues/rx-*; do
     echo $(( 32768 / ${q:-1} )) > "$rxq/rps_flow_cnt" 2>/dev/null || true

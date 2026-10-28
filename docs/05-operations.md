@@ -1,99 +1,121 @@
 # 05. Эксплуатация
 
-## Ежедневно / автоматически
+## Автоматически
 
 | Что | Как |
 |---|---|
-| Обновления безопасности | `unattended-upgrades` (ежедневно), `needrestart` перезапускает службы |
-| Продление сертификата | `certbot.timer` + reload ocserv без разрыва сессий |
-| Защита от перебора | ocserv `max-ban-score` (VPN), fail2ban (SSH) |
-| Аудит | auditd, journald (90 дней) |
+| Обновления безопасности ОС | `unattended-upgrades` (ежедневно), `needrestart` перезапускает службы |
+| Защита SSH | fail2ban, nftables rate-limit |
+| Аудит | auditd (`ausearch -k xray -i` — изменения конфигурации VPN), journald 90 дней |
 
-## Мониторинг
+Xray — отдельный бинарник с GitHub, **apt его не обновляет** (см. «Обновление Xray»).
 
-`scripts/healthcheck.sh` возвращает код `0`/`1` — его удобно вызывать из любой системы мониторинга
-(Zabbix `system.run`, Nagios/Icinga check, cron + почта):
+## Кто подключён, трафик
 
+```bash
+sudo ./scripts/vpn-user.sh list
+```
+```
+ПОЛЬЗОВАТЕЛЬ  АКТИВЕН  СОЗДАН      СКАЧАНО  ОТПРАВЛЕНО  ОНЛАЙН (IP)
+ivan          да       2026-10-28  12.0GiB  310.0MiB    да (198.51.100.7)
+petr          нет      2026-10-28  0B       0B          -
+```
+Трафик считается с последнего перезапуска Xray.
+
+Напрямую через API Xray (слушает только `127.0.0.1:10085`):
+```bash
+X=/usr/local/bin/xray; S=--server=127.0.0.1:10085
+$X api statsgetallonlineusers $S                 # кто онлайн
+$X api statsonlineiplist $S -email ivan          # с каких IP подключён ivan
+$X api statsquery $S -pattern 'user>>>'          # трафик всех пользователей
+$X api statsquery $S -pattern 'user>>>' -reset   # ... и обнулить счётчики (например, раз в месяц)
+```
+
+Сервер в целом:
+```bash
+systemctl status xray
+journalctl -u xray --since -1h          # ошибки (уровень warning)
+ss -Htn state established '( sport = :443 )' | wc -l    # число TCP-соединений клиентов
+iftop -i enp1s0                         # трафик интерфейса
+sudo ./scripts/healthcheck.sh           # код возврата 0/1 — для мониторинга
+```
+
+**История «кто куда ходил» не пишется**: `XRAY_ACCESS_LOG="no"`. Включение (`yes` в `config.env` +
+`03-install-vpn.sh`) записывает в журнал каждое соединение пользователей с адресами сайтов — это
+персональные данные; включайте только при необходимости (расследование злоупотреблений) и
+предупредите пользователей.
+
+Мониторинг по cron:
 ```cron
 */5 * * * * root /opt/vpn-https-debian/scripts/healthcheck.sh >/var/log/vpn-health.log 2>&1 || logger -p user.err "VPN healthcheck FAILED"
 ```
 
-Что ещё стоит собирать (например, node_exporter + Prometheus):
-* трафик и pps на `WAN_IF`, ошибки/дропы NIC (`ethtool -S`);
-* загрузка CPU по ядрам (softirq!);
-* `nf_conntrack_count / nf_conntrack_max`;
-* число клиентов: `occtl -j show users | jq length`;
-* срок действия сертификата;
-* внешняя проверка доступности TCP/443 и UDP/443 из другой сети.
-
-Полезные команды:
-```bash
-sudo occtl show status               # аптайм, сессии, баны
-sudo occtl show users                # кто подключён, IP, трафик
-sudo occtl show user ivan
-sudo occtl disconnect user ivan
-sudo occtl show ip bans
-sudo journalctl -u ocserv --since -1h
-sudo ausearch -k ocserv -i           # кто менял конфигурацию VPN
-sudo fail2ban-client status sshd
-```
-
 ## Изменение конфигурации
 
-Не редактируйте файлы на сервере вручную — правьте `config.env` или шаблоны в `templates/`,
-затем перезапустите нужный шаг (скрипты идемпотентны, старые версии сохраняются в
+Правьте `config.env` и запускайте нужный шаг повторно (идемпотентно, старые файлы — в
 `/var/backups/vpn-https-debian/`):
 ```bash
-sudo ./scripts/03-install-vpn.sh     # ocserv/unbound
-sudo ./scripts/02-firewall.sh        # nftables
+sudo ./scripts/03-install-vpn.sh     # Xray, REALITY_DEST, unbound
+sudo ./scripts/02-firewall.sh        # nftables (порт Xray, SSH)
 ```
-Изменения, не требующие перезапуска ocserv (маршруты, DNS для новых сессий, сертификат):
-`sudo systemctl reload ocserv`. Изменение сети/портов — `restart` (клиенты переподключатся
-автоматически по cookie).
+Ключи REALITY и пользователи сохраняются — ссылки у клиентов остаются рабочими. Если поменяли
+`REALITY_DEST`/`REALITY_SERVER_NAMES`/`VPN_DOMAIN`/`XRAY_PORT` — у клиентов поменяется ссылка:
+раздайте новые (`vpn-user.sh link <имя>`).
 
-## Обновление ядра и перезагрузка
+## Обновление Xray
 
-1. Проверить, нужна ли перезагрузка: `sudo needrestart -k` или наличие `/run/reboot-required`.
-2. В окно обслуживания: предупредить пользователей → `sudo reboot`.
+```bash
+sudo ./scripts/03-install-vpn.sh      # XRAY_VERSION="latest" — поставит новую версию, если вышла
+/usr/local/bin/xray version
+```
+Перед обновлением прочитайте release notes на https://github.com/XTLS/Xray-core/releases —
+иногда меняются параметры конфигурации. Скрипт проверяет новый конфиг (`xray run -test`) и
+контрольную сумму релиза. Обновляйте раз в 1–2 месяца или сразу при исправлениях безопасности.
+
+## Если IP заблокировали
+
+Признак: из определённых сетей (или из всей страны) соединение с `IP:443` не устанавливается,
+хотя из других стран сервер доступен. REALITY здесь не поможет — блокируется адрес. Порядок:
+
+1. Получите новый IP (у хостера — смена адреса, либо новый VPS; у облаков с почасовой оплатой —
+   новый сервер за минуту).
+2. Перенесите `config.env`, `split-exclude.txt` и резервную копию `/etc/xray` (раздел ниже),
+   разверните проект — **ключи и UUID те же, ссылки клиентов не меняются**.
+3. Если клиенты подключаются по домену (`VPN_DOMAIN`) — поменяйте A-запись (TTL 300), и всё.
+   Если по IP — раздайте новые ссылки.
+
+Поэтому рекомендуется задавать `VPN_DOMAIN`.
+
+## Перезагрузка и обновление ядра
+
+1. Нужна ли: `sudo needrestart -k` или наличие `/run/reboot-required`.
+2. В окно обслуживания: `sudo reboot`. Клиенты переподключатся сами.
 3. После загрузки: `sudo ./scripts/healthcheck.sh`.
-
-Клиенты OpenConnect/Cisco переподключатся сами (сессионный cookie переживает перезапуск благодаря
-`persistent-cookies`, если перезагрузка уложилась в `cookie-timeout`; иначе — повторный вход).
-
-## Переход на новую версию Debian
-
-Рекомендуемый путь — **новый сервер** (blue/green): развернуть проект на свежем Debian, перенести
-резервную копию, переключить DNS-запись, через сутки вывести старый сервер. Обновление «на месте»
-(`apt full-upgrade` со сменой codename) возможно, но рискованнее для удалённой машины.
 
 ## Резервное копирование
 
-Достаточно сохранить:
 ```bash
-sudo tar czf vpn-backup-$(date +%F).tar.gz \
-  /etc/ocserv /etc/letsencrypt /etc/nftables.conf /etc/unbound/unbound.conf.d \
-  /opt/vpn-https-debian/config.env
+sudo tar czf vpn-backup-$(date +%F).tar.gz /etc/xray /opt/vpn-https-debian/config.env \
+     /opt/vpn-https-debian/split-exclude.txt 2>/dev/null
 sudo gpg --symmetric --cipher-algo AES256 vpn-backup-*.tar.gz && sudo shred -u vpn-backup-*.tar.gz
 ```
-Архив содержит **секреты** (ключ TLS, хеши паролей, TOTP-ключи) — храните только зашифрованным,
-вне сервера. Восстановление: развернуть проект (шаги 01–04), распаковать архив поверх,
-`systemctl restart ocserv`.
+В архиве **ключ REALITY и UUID всех пользователей** — храните только зашифрованным и вне сервера.
+Восстановление: шаги 01–02, распаковать архив, шаг 03.
 
 ## Реагирование на инциденты
 
 | Событие | Действия |
 |---|---|
-| Скомпрометирована учётная запись VPN | `vpn-user.sh lock <user>` (немедленное отключение), `vpn-user.sh otp` + `passwd`, анализ `journalctl -u ocserv | grep <user>` |
-| Утечка ключа TLS | `certbot revoke --cert-name vpn.example.com --reason keycompromise`, удалить и выпустить заново (`03-install-vpn.sh`), сменить `CAMOUFLAGE_SECRET` |
-| Подозрение на взлом сервера | изолировать (оставить доступ только через IPMI), снять образ диска/памяти для анализа, развернуть **новый** сервер из проекта и бэкапа, сменить все пароли/TOTP/ключи |
-| DDoS на 443 | включить anti-DDoS хостера; ocserv ограничивает частоту (`rate-limit-ms`) и банит; при необходимости — временно `SSH_ALLOW_FROM` и whitelisting в nftables |
+| Утекла ссылка пользователя | `vpn-user.sh reset <имя>` — старая перестаёт работать сразу |
+| Утёк `/etc/xray/keys.json` (ключ REALITY) | удалить `keys.json`, запустить `03-install-vpn.sh` (новые ключи), раздать новые ссылки всем |
+| Жалоба хостера на трафик (спам, торренты, атаки) | временно `XRAY_ACCESS_LOG="yes"`, найти пользователя, `lock`; затем выключить журнал |
+| Подозрение на взлом сервера | изолировать (доступ только через консоль хостера), снять образ диска, развернуть **новый** сервер, сменить ключи REALITY и UUID всех пользователей |
 
 ## Периодически (раз в квартал)
 
 - [ ] `sudo lynis audit system` — сравнить hardening index с прошлым
-- [ ] внешняя проверка TLS (`testssl.sh vpn.example.com`)
-- [ ] `nmap` снаружи — открыты только ожидаемые порты
-- [ ] ревизия пользователей VPN: `vpn-user.sh list`, удалить уволенных/неактивных
+- [ ] `nmap` снаружи — открыты только 443 и SSH
+- [ ] сайт-маскировка всё ещё отвечает по TLS 1.3 / HTTP/2 (`healthcheck.sh`)
+- [ ] ревизия пользователей VPN: `vpn-user.sh list`, удалить неактивных
 - [ ] ревизия `authorized_keys` администраторов
 - [ ] проверка восстановления из резервной копии
-- [ ] `debsums -s` — целостность файлов пакетов

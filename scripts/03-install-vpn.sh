@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  Шаг 3. VPN-сервер ocserv (OpenConnect) поверх HTTPS (TLS 1.3 / DTLS 1.2)
-#   - сертификат Let's Encrypt (ECDSA P-256) с автопродлением без разрыва сессий;
-#   - аутентификация: пароль + TOTP (опционально);
-#   - маскировка под обычный веб-сервер;
-#   - собственный DNS-резолвер unbound для клиентов (без DNS-утечек).
+#  Шаг 3. VPN-сервер Xray: VLESS + REALITY + XTLS Vision (TCP/443)
+#   - Xray с официального GitHub (проверка SHA-256), отдельный пользователь
+#     xray, песочница systemd;
+#   - ключи REALITY (x25519) и shortId генерируются один раз;
+#   - проверка сайта для маскировки (REALITY_DEST): TLS 1.3 + HTTP/2;
+#   - локальный DNS-резолвер unbound (DNSSEC) для запросов клиентов.
+#  Безопасно запускать повторно: ключи и пользователи сохраняются.
 # =============================================================================
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -12,133 +14,119 @@ source "$(dirname "$0")/lib.sh"
 require_root
 require_debian
 load_config
+require_reality
 
-log "Установка ocserv, certbot, unbound, oathtool"
+log "Установка зависимостей"
 apt-get update
-apt_install ocserv certbot unbound dns-root-data oathtool qrencode gnutls-bin bind9-dnsutils jq gettext-base
+apt_install curl unzip ca-certificates openssl unbound dns-root-data \
+    qrencode jq python3 bind9-dnsutils gettext-base
+modprobe tcp_bbr 2>/dev/null || true
 
-# Модули ядра заранее: ocserv работает в песочнице и сам их не загрузит.
-printf 'tun\nnf_conntrack\ntcp_bbr\n' > /etc/modules-load.d/vpn.conf
-modprobe -a tun nf_conntrack tcp_bbr
+# --- 1. Xray ------------------------------------------------------------------
+case "$(uname -m)" in
+    x86_64)  asset=Xray-linux-64.zip ;;
+    aarch64) asset=Xray-linux-arm64-v8a.zip ;;
+    *) die "Архитектура $(uname -m) не поддерживается скриптом." ;;
+esac
 
-# --- 1. Проверка DNS-записи --------------------------------------------------
-resolved="$(getent ahostsv4 "${VPN_DOMAIN}" | awk '{print $1; exit}' || true)"
-if [[ ${resolved} != "${WAN_IPV4}" ]]; then
-    warn "${VPN_DOMAIN} указывает на '${resolved:-ничего}', а IP сервера ${WAN_IPV4}."
-    warn "Let's Encrypt не выдаст сертификат, пока A-запись не исправлена."
-    [[ -t 0 ]] && { read -r -p "Продолжить всё равно? [y/N] " a; [[ $a == [yY] ]] || exit 1; }
+version="${XRAY_VERSION}"
+if [[ ${version} == latest ]]; then
+    version="$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/XTLS/Xray-core/releases/latest | sed 's#.*/tag/##')"
+    [[ ${version} == v* ]] || die "Не удалось узнать последнюю версию Xray; задайте XRAY_VERSION (например, v26.10.21)."
 fi
 
-# --- 2. TLS-сертификат --------------------------------------------------------
-systemctl stop ocserv 2>/dev/null || true
-
-if [[ ! -f /etc/letsencrypt/live/${VPN_DOMAIN}/fullchain.pem ]]; then
-    certbot_args=(certonly --standalone --preferred-challenges http
-                  --non-interactive --agree-tos -m "${ACME_EMAIL}"
-                  --key-type ecdsa --elliptic-curve secp256r1 -d "${VPN_DOMAIN}")
-    acme_hint="Частые причины (точная — в строке 'Detail:' выше):
-    * 'DNS problem: NXDOMAIN'        — нет A-записи ${VPN_DOMAIN} или она ещё не разошлась;
-    * 'Timeout during connect'       — TCP/80 закрыт (firewall/anti-DDoS хостера);
-    * 'Connection refused'           — A-запись указывает на другой IP;
-    * 'Invalid response ... 404'     — A или AAAA указывает на чужой сервер (заглушка регистратора);
-    * 'too many failed authorizations' — лимит Let's Encrypt, подождите час.
-  Проверка: dig +short A ${VPN_DOMAIN} @1.1.1.1; dig +short AAAA ${VPN_DOMAIN} @1.1.1.1 (IP сервера: ${WAN_IPV4})"
-
-    # Пробный выпуск на тестовом сервере LE: не расходует лимиты боевого
-    # (5 неудачных проверок в час), поэтому ошибки DNS/порта 80 ловим здесь.
-    log "Пробная проверка домена ${VPN_DOMAIN} (Let's Encrypt staging)"
-    certbot "${certbot_args[@]}" --dry-run || die "Пробная проверка не прошла. ${acme_hint}"
-
-    log "Выпуск сертификата Let's Encrypt для ${VPN_DOMAIN} (ECDSA P-256)"
-    certbot "${certbot_args[@]}" || die "Сертификат не выпущен. ${acme_hint}"
+installed="$("${XRAY_BIN}" version 2>/dev/null | awk 'NR==1{print "v"$2}' || true)"
+if [[ ${installed} == "${version}" ]]; then
+    log "Xray ${version} уже установлен"
 else
-    log "Сертификат для ${VPN_DOMAIN} уже есть"
+    log "Установка Xray ${version} (${asset})"
+    work="$(mktemp -d)"
+    trap 'rm -rf "${work}"' EXIT
+    base="https://github.com/XTLS/Xray-core/releases/download/${version}"
+    curl -fsSL --retry 3 -o "${work}/${asset}" "${base}/${asset}"
+    curl -fsSL --retry 3 -o "${work}/${asset}.dgst" "${base}/${asset}.dgst"
+    expected="$(grep -E '^SHA(2-)?256=' "${work}/${asset}.dgst" | awk '{print $2}' | head -n1)"
+    actual="$(sha256sum "${work}/${asset}" | awk '{print $1}')"
+    [[ -n ${expected} && ${expected} == "${actual}" ]] \
+        || die "Контрольная сумма ${asset} не совпала (ожидалось ${expected:-?}, получено ${actual})."
+    unzip -q -o "${work}/${asset}" -d "${work}/x"
+    install -m 0755 "${work}/x/xray" "${XRAY_BIN}"
+    install -d -m 0755 /usr/local/share/xray
+    install -m 0644 "${work}/x/geoip.dat" "${work}/x/geosite.dat" /usr/local/share/xray/
+    log "Установлен: $("${XRAY_BIN}" version | head -n1)"
 fi
 
-# После продления — мягкая перезагрузка ocserv (SIGHUP): сессии не рвутся.
-install -d /etc/letsencrypt/renewal-hooks/deploy
-cat > /etc/letsencrypt/renewal-hooks/deploy/ocserv-reload.sh <<'EOF'
-#!/bin/sh
-systemctl reload ocserv
-EOF
-chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/ocserv-reload.sh
-systemctl enable --now certbot.timer
+getent group xray >/dev/null || groupadd --system xray
+getent passwd xray >/dev/null || useradd --system --gid xray --no-create-home \
+    --home-dir /nonexistent --shell /usr/sbin/nologin xray
+install -d -m 0750 -o root -g xray "${XRAY_STORE}"
 
-# --- 3. Конфигурация ocserv -------------------------------------------------
-log "Конфигурация ocserv"
-install -d -m 0750 /etc/ocserv
-for f in ocpasswd users.oath; do
-    [[ -f /etc/ocserv/$f ]] || install -m 0600 /dev/null "/etc/ocserv/$f"
-    chmod 0600 "/etc/ocserv/$f"
-done
+# --- 2. Ключи REALITY ---------------------------------------------------------
+if [[ ! -s ${XRAY_STORE}/keys.json ]]; then
+    log "Генерация ключей REALITY (x25519) и shortId"
+    keyout="$("${XRAY_BIN}" x25519)"
+    priv="$(awk -F': *' '/^PrivateKey/{print $2}' <<<"${keyout}")"
+    # Новые версии называют публичный ключ «Password (PublicKey)», старые — «Public key».
+    pub="$(awk -F': *' '/^(Password|Public)/{print $2}' <<<"${keyout}" | head -n1)"
+    [[ -n ${priv} && -n ${pub} ]] || die "Не удалось разобрать вывод 'xray x25519': ${keyout}"
+    sid="$(openssl rand -hex 8)"
+    umask 077
+    jq -n --arg priv "${priv}" --arg pub "${pub}" --arg sid "${sid}" \
+        '{privateKey: $priv, publicKey: $pub, shortIds: [$sid]}' > "${XRAY_STORE}/keys.json"
+    umask 022
+fi
+[[ -s ${XRAY_STORE}/users.json ]] || echo '{"users": []}' > "${XRAY_STORE}/users.json"
+chmod 0600 "${XRAY_STORE}/keys.json" "${XRAY_STORE}/users.json"
 
-if [[ ${ENABLE_OTP} == yes ]]; then
-    OCSERV_AUTH_LINE='auth = "plain[passwd=/etc/ocserv/ocpasswd,otp=/etc/ocserv/users.oath]"'
-else
-    OCSERV_AUTH_LINE='auth = "plain[passwd=/etc/ocserv/ocpasswd]"'
+# --- 3. Проверка сайта для маскировки ----------------------------------------
+dest_host="${REALITY_DEST%:*}"
+log "Проверка REALITY_DEST=${REALITY_DEST}"
+ping_out="$("${XRAY_BIN}" tls ping "${dest_host}" 2>&1 || true)"
+if ! grep -q 'TLS Version:[[:space:]]*TLS 1.3' <<<"${ping_out}"; then
+    echo "${ping_out}" | tail -n 15
+    die "${dest_host} не отвечает по TLS 1.3 — выберите другой сайт (см. docs/02-vpn-server.md)."
+fi
+h2="$(curl -s -o /dev/null --max-time 10 --http2 -w '%{http_version}' "https://${dest_host}/" || true)"
+[[ ${h2} == 2 ]] || warn "${dest_host} не отвечает по HTTP/2 (ответ: '${h2}'). Лучше выбрать сайт с HTTP/2."
+grep -q 'Post-Quantum key exchange:[[:space:]]*true' <<<"${ping_out}" \
+    || warn "${dest_host} не поддерживает X25519MLKEM768 — клиенту с fp=chrome это не мешает, но сайт с PQ правдоподобнее."
+log "  ${dest_host}: TLS 1.3, HTTP/${h2:-?}"
+
+# --- 4. DNS-резолвер для Xray ---------------------------------------------------
+log "unbound (локальный DNS, DNSSEC)"
+cpus="$(nproc)"
+UNBOUND_THREADS=$(( cpus >= 16 ? 4 : (cpus >= 4 ? 2 : 1) ))
+UNBOUND_SLABS=$(( UNBOUND_THREADS * 2 ))
+export UNBOUND_THREADS UNBOUND_SLABS
+rm -f /etc/unbound/unbound.conf.d/split-exclude-forward.conf   # от старой версии проекта
+render "${TEMPLATES_DIR}/unbound/vpn.conf.tpl" /etc/unbound/unbound.conf.d/vpn.conf 0644 \
+    UNBOUND_THREADS UNBOUND_SLABS
+unbound-checkconf >/dev/null || die "unbound-checkconf: ошибка конфигурации"
+systemctl enable unbound
+systemctl restart unbound
+
+# Прежняя версия проекта (ocserv) занимает порт 443 — останавливаем до запуска Xray.
+if systemctl list-unit-files ocserv.service 2>/dev/null | grep -q '^ocserv\.service'; then
+    warn "Найден ocserv от прежней версии проекта — останавливаю и отключаю."
+    systemctl disable --now ocserv vpn-split-routes.timer 2>/dev/null || true
 fi
 
-if [[ -z ${CAMOUFLAGE_SECRET} ]]; then
-    CAMOUFLAGE_SECRET="$(openssl rand -hex 16)"
-    sed -i "s/^CAMOUFLAGE_SECRET=.*/CAMOUFLAGE_SECRET=\"${CAMOUFLAGE_SECRET}\"/" "${CONFIG_FILE}"
-    log "Сгенерирован CAMOUFLAGE_SECRET и сохранён в ${CONFIG_FILE}"
-fi
-OCSERV_CAMOUFLAGE_LINES="camouflage = true
-camouflage_secret = \"${CAMOUFLAGE_SECRET}\"
-camouflage_realm = \"Restricted Content\""
+# --- 5. Конфигурация и запуск Xray --------------------------------------------
+log "Конфигурация Xray"
+install_file "${TEMPLATES_DIR}/systemd/xray.service" /etc/systemd/system/xray.service
+systemctl daemon-reload
+xray_apply
+systemctl enable xray
+systemctl restart xray
+sleep 2
+systemctl is-active --quiet xray || { journalctl -u xray -n 50 --no-pager; die "Xray не запустился"; }
 
-if [[ -n ${VPN_NET6} ]]; then
-    OCSERV_IPV6_LINES="ipv6-network = ${VPN_NET6}
-ipv6-subnet-prefix = 128"
-else
-    OCSERV_IPV6_LINES="# IPv6 в туннеле отключён (VPN_NET6 пуст)"
-fi
-export OCSERV_AUTH_LINE OCSERV_CAMOUFLAGE_LINES OCSERV_IPV6_LINES
-
-render "${TEMPLATES_DIR}/ocserv/ocserv.conf.tpl" /etc/ocserv/ocserv.conf 0600 \
-    VPN_DOMAIN VPN_NET4 VPN_GW4 MAX_CLIENTS MAX_SAME_CLIENTS VPN_MTU \
-    OCSERV_AUTH_LINE OCSERV_CAMOUFLAGE_LINES OCSERV_IPV6_LINES
-ocserv -t -c /etc/ocserv/ocserv.conf >/dev/null || die "ocserv -t: ошибка в /etc/ocserv/ocserv.conf"
-
-install_file "${TEMPLATES_DIR}/systemd/ocserv-override.conf" /etc/systemd/system/ocserv.service.d/override.conf
-
-# Аудит изменений конфигурации VPN и сертификатов (каталоги уже существуют).
+# Аудит изменений конфигурации VPN (каталоги уже существуют).
 if [[ -d /etc/audit/rules.d ]]; then
-    install_file "${TEMPLATES_DIR}/audit/60-vpn-ocserv.rules" /etc/audit/rules.d/60-vpn-ocserv.rules 0640
+    rm -f /etc/audit/rules.d/60-vpn-ocserv.rules   # от старой версии проекта
+    install_file "${TEMPLATES_DIR}/audit/60-vpn-xray.rules" /etc/audit/rules.d/60-vpn-xray.rules 0640
     augenrules --load >/dev/null || warn "augenrules: правила аудита VPN не загрузились (auditctl -l)"
 fi
 
-# --- 4. DNS-резолвер для клиентов -----------------------------------------------
-log "unbound (DNS для VPN-клиентов, DNSSEC)"
-cpus="$(nproc)"
-UNBOUND_THREADS=$(( cpus >= 32 ? 8 : (cpus >= 8 ? 4 : (cpus >= 2 ? 2 : 1)) ))
-UNBOUND_SLABS=$(( UNBOUND_THREADS * 2 ))
-UNBOUND_ACL6=""
-[[ -n ${VPN_NET6} ]] && UNBOUND_ACL6="    access-control: ${VPN_NET6} allow"
-export UNBOUND_THREADS UNBOUND_SLABS UNBOUND_ACL6
-render "${TEMPLATES_DIR}/unbound/vpn.conf.tpl" /etc/unbound/unbound.conf.d/vpn.conf 0644 \
-    VPN_NET4 UNBOUND_ACL6 UNBOUND_THREADS UNBOUND_SLABS
-unbound-checkconf >/dev/null || die "unbound-checkconf: ошибка конфигурации"
-
-# --- 5. Запуск ----------------------------------------------------------------
-systemctl daemon-reload
-systemctl enable unbound ocserv
-systemctl restart unbound
-
-# Исключения из туннеля по списку доменов (split-exclude.txt) + ежедневный таймер.
-log "Исключения из туннеля (split exclude)"
-bash "${PROJECT_DIR}/scripts/update-split-routes.sh" --no-reload \
-    || warn "Исключения не применены — VPN работает в режиме «весь трафик в туннель»."
-export PROJECT_DIR
-render "${TEMPLATES_DIR}/systemd/vpn-split-routes.service.tpl" /etc/systemd/system/vpn-split-routes.service 0644 PROJECT_DIR
-install_file "${TEMPLATES_DIR}/systemd/vpn-split-routes.timer" /etc/systemd/system/vpn-split-routes.timer
-systemctl daemon-reload
-systemctl enable --now vpn-split-routes.timer
-
-systemctl restart ocserv
-sleep 2
-systemctl is-active --quiet ocserv || { journalctl -u ocserv -n 50 --no-pager; die "ocserv не запустился"; }
-
-log "VPN-сервер запущен."
-log "Адрес для клиентов:  https://${VPN_DOMAIN}/?${CAMOUFLAGE_SECRET}"
+log "VPN-сервер запущен: VLESS + REALITY на ${VPN_DOMAIN:-${WAN_IPV4}}:${XRAY_PORT}, маскировка под ${dest_host}"
 log "Добавьте пользователя: sudo ./scripts/vpn-user.sh add <имя>"

@@ -31,7 +31,7 @@ apt_install sudo ca-certificates curl gnupg openssh-server \
     chrony libpam-pwquality gettext-base \
     lynis ethtool irqbalance htop iftop jq
 
-# --- 2. Время: UTC + chrony (важно для TLS, TOTP и логов) -------------------
+# --- 2. Время: UTC + chrony (важно для TLS, REALITY и логов) -------------------
 log "Часовой пояс UTC, синхронизация времени (chrony)"
 timedatectl set-timezone UTC
 systemctl enable --now chrony
@@ -155,7 +155,6 @@ fi
 # --- 9. fail2ban -------------------------------------------------------------
 log "fail2ban для SSH"
 F2B_IGNORE="${SSH_ALLOW_FROM}"
-[[ ${SSH_FROM_VPN} == yes ]] && F2B_IGNORE+=" ${VPN_NET4}"
 export F2B_IGNORE
 render "${TEMPLATES_DIR}/fail2ban/sshd.local.tpl" /etc/fail2ban/jail.d/sshd.local 0644 F2B_IGNORE SSH_PORT
 systemctl enable fail2ban

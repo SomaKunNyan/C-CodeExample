@@ -13,7 +13,7 @@
 -w /root/.ssh/ -p wa -k root_ssh
 
 ## Firewall и модули ядра
-## (правила для /etc/ocserv и сертификатов — в 60-vpn-ocserv.rules, их ставит
+## (правила для /etc/xray — в 60-vpn-xray.rules, их ставит
 ##  03-install-vpn.sh: auditctl отвергает наблюдение за несуществующим каталогом)
 -w /etc/nftables.conf -p wa -k firewall
 -a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k modules

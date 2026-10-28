@@ -1,65 +1,54 @@
 # 04. Подключение клиентов
 
-Пользователь получает от администратора:
-* **адрес:** `https://vpn.example.com/?<CAMOUFLAGE_SECRET>` (адрес вместе с секретом);
-* **логин и пароль;**
-* **QR-код TOTP** — отсканировать в Google Authenticator / Aegis / FreeOTP / Bitwarden.
+Пользователь получает от администратора **ссылку** `vless://…` (или QR-код) — она содержит всё:
+адрес сервера, UUID, ключ REALITY, `shortId`, SNI и отпечаток. Логин и пароль не нужны.
 
-При подключении вводятся пароль, затем — 6-значный код из приложения.
+Администратор: `sudo ./scripts/vpn-user.sh add <имя>` (новый) или `link <имя>` (показать снова).
 
-> Если какой-то клиент не принимает адрес с `/?секрет`, используйте клиент на базе OpenConnect
-> (поддерживает camouflage полностью) или отключите маскировку на сервере
-> (`camouflage = false`) — шифрование и безопасность от этого не меняются, только скрытность.
+## Приложения
 
-## Linux
+Подходит любой клиент на ядре **Xray** или **sing-box** с поддержкой VLESS + REALITY + Vision.
+Проверенные популярные варианты:
 
-**NetworkManager (графически):**
-```bash
-sudo apt install network-manager-openconnect-gnome     # GNOME; для KDE: plasma-nm уже умеет
-```
-Настройки → Сеть → VPN → «+» → *Multi-protocol VPN client (openconnect)* → протокол
-*Cisco AnyConnect or openconnect* → шлюз `https://vpn.example.com/?<секрет>`.
+| Платформа | Приложение | Импорт |
+|---|---|---|
+| Android | **v2rayNG**, **Hiddify**, NekoBox | «+» → «Импорт из буфера обмена» или сканировать QR |
+| iOS / iPadOS | **Streisand**, **V2Box**, **Hiddify**, FoXray, Shadowrocket (платный) | «+» → из буфера / QR |
+| Windows | **v2rayN**, **Hiddify** | «Серверы» → «Импорт из буфера обмена» |
+| macOS | **Hiddify**, V2Box, FoXray | «+» → из буфера |
+| Linux | **Hiddify**, v2rayN (Linux-сборка), или `xray` + JSON из `client-config` | — |
 
-**Командная строка:**
-```bash
-sudo apt install openconnect
-sudo openconnect --protocol=anyconnect -u ivan "https://vpn.example.com/?<секрет>"
-```
-Фоновый режим: добавьте `-b`, отключение — `sudo pkill -SIGINT openconnect`.
+Устанавливайте приложения только из официальных магазинов или с официальных GitHub-страниц проектов.
 
-## Windows
+Обязательно включите в приложении режим **VPN / TUN** (весь трафик устройства), а не только
+системный прокси — иначе часть приложений пойдёт мимо.
 
-* **OpenConnect-GUI** (https://gui.openconnect-vpn.net/) — открытый клиент. New profile →
-  Gateway: `https://vpn.example.com/?<секрет>` → Connect.
-* **Cisco Secure Client (AnyConnect)** — если уже используется в организации. Адрес:
-  `vpn.example.com/?<секрет>`.
+## Исключения (сайты мимо VPN)
 
-## macOS
+Маршрутизацию по доменам выполняет **клиентское приложение** — см. [06](06-split-tunneling.md):
 
-* **OpenConnect-GUI** или `brew install openconnect` + `sudo openconnect ...` как в Linux.
-* **Cisco Secure Client**.
+* **Hiddify:** Настройки → «Регион» = Россия → российские сайты и IP идут напрямую.
+* **v2rayNG / v2rayN:** «Настройки маршрутизации» → правило «direct» для доменов/IP;
+  или импортируйте полный конфиг из `vpn-user.sh client-config <имя>` (см. 06).
 
-## Android
+Названия пунктов меню отличаются между версиями приложений.
 
-* **Cisco Secure Client** (Google Play) или открытый **OpenConnect** (F-Droid,
-  «OpenConnect for Android» / ics-openconnect). Новое подключение → адрес сервера с секретом.
-
-## iOS / iPadOS
-
-* **Cisco Secure Client** (App Store). Connections → Add VPN Connection → Server Address:
-  `vpn.example.com/?<секрет>`.
-
-## Проверка на клиенте
+## Проверка на устройстве
 
 1. https://ifconfig.me — показывает IP сервера.
-2. https://dnsleaktest.com (Extended test) — только IP сервера / ДЦ.
-3. https://test-ipv6.com — нет вашего домашнего IPv6.
-4. Linux: `openconnect` пишет в лог `Established DTLS connection ... AES-256-GCM` — работает
-   быстрый канал. Если такой строки нет — UDP/443 блокируется по пути, работает резервный TLS-канал.
+2. https://dnsleaktest.com (Extended test) — только серверы не вашего провайдера.
+3. В приложении есть «тест задержки» (ping/real delay) — должен показывать время, а не ошибку.
+
+## Если не подключается
+
+| Симптом | Что проверить |
+|---|---|
+| Таймаут, «context deadline exceeded» | IP сервера недоступен из этой сети (см. [05](05-operations.md)); проверьте с мобильного интернета и Wi-Fi |
+| `REALITY: processed invalid connection` / «handshake failed» | ссылка устарела (после `reset`) — попросите новую; проверьте, что часы на устройстве точные |
+| Подключается, но ничего не открывается | пользователь заблокирован администратором, или на сервере не работает DNS (`healthcheck.sh`) |
 
 ## Рекомендации пользователям
 
-* Устанавливайте клиенты только из официальных источников.
-* Не передавайте пароль и коды TOTP никому, включая «администраторов» в мессенджерах.
-* Потерян телефон с TOTP — сообщите администратору: `vpn-user.sh otp <user>` выдаст новый ключ,
-  старый перестанет работать.
+* Ссылка — это ключ доступа: не пересылайте её, не публикуйте скриншоты с QR-кодом.
+* Потеряли устройство — сообщите администратору: `vpn-user.sh reset <имя>` выдаст новую ссылку,
+  старая перестанет работать.

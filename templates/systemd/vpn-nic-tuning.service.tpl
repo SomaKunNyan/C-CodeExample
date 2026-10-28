@@ -4,7 +4,7 @@
 [Unit]
 Description=Tune 40G NIC (${WAN_IF}) for VPN forwarding
 After=network-pre.target
-Before=network.target ocserv.service
+Before=network.target xray.service
 Wants=network-pre.target
 
 [Service]

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  Шаг 2. Межсетевой экран nftables (default deny) + NAT для VPN.
+#  Шаг 2. Межсетевой экран nftables (default deny): наружу только SSH и Xray.
 #  Применение с автоматическим откатом: если в течение 60 секунд не
 #  подтвердить, что SSH работает, — восстанавливаются прежние правила.
 # =============================================================================
@@ -28,30 +28,17 @@ if [[ -n ${SSH_ALLOW_FROM} ]]; then
     done
     [[ -n $v4 ]] && NFT_SSH_RULES+="        ip saddr { ${v4} } tcp dport ${SSH_PORT} accept"$'\n'
     [[ -n $v6 ]] && NFT_SSH_RULES+="        ip6 saddr { ${v6} } tcp dport ${SSH_PORT} accept"$'\n'
-    [[ ${SSH_FROM_VPN} == yes ]] && NFT_SSH_RULES+="        iifname \"vpns*\" ip saddr ${VPN_NET4} tcp dport ${SSH_PORT} accept"$'\n'
 else
     warn "SSH_ALLOW_FROM пуст: SSH доступен из интернета (rate-limit + fail2ban)."
     NFT_SSH_RULES+="$(ssh_rule_open)"$'\n'
 fi
 
-# --- IPv6 внутри туннеля --------------------------------------------------------
-NFT_INPUT6_DNS="" NFT_FORWARD6="" NFT_NAT6=""
-if [[ -n ${VPN_NET6} ]]; then
-    NFT_INPUT6_DNS="        iifname \"vpns*\" ip6 saddr ${VPN_NET6} meta l4proto { tcp, udp } th dport 53 accept"
-    NFT_FORWARD6="        iifname \"vpns*\" oifname \"${WAN_IF}\" ip6 saddr ${VPN_NET6} accept"
-    NFT_NAT6="table ip6 nat {
-    chain postrouting {
-        type nat hook postrouting priority srcnat; policy accept;
-        oifname \"${WAN_IF}\" ip6 saddr ${VPN_NET6} masquerade
-    }
-}"
-fi
-export NFT_SSH_RULES NFT_INPUT6_DNS NFT_FORWARD6 NFT_NAT6
+export NFT_SSH_RULES
 
 # --- Генерация и проверка --------------------------------------------------------
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
-envsubst '${WAN_IF} ${WAN_IPV4} ${VPN_NET4} ${NFT_SSH_RULES} ${NFT_INPUT6_DNS} ${NFT_FORWARD6} ${NFT_NAT6}' \
+envsubst '${XRAY_PORT} ${NFT_SSH_RULES}' \
     < "${TEMPLATES_DIR}/nftables/nftables.conf.tpl" > "$tmp"
 nft -c -f "$tmp" || die "Синтаксическая ошибка в сгенерированных правилах ($tmp)."
 
@@ -83,17 +70,10 @@ install -m 0600 "$tmp" /etc/nftables.conf
 systemctl enable nftables
 systemctl restart nftables
 
-# IP forwarding — нужен для маршрутизации трафика клиентов.
-{
-    echo "net.ipv4.ip_forward = 1"
-    if [[ -n ${VPN_NET6} ]]; then
-        echo "net.ipv6.conf.all.forwarding = 1"
-        # При forwarding=1 ядро игнорирует Router Advertisement; если IPv6 на
-        # WAN получен через SLAAC — сохраняем его.
-        echo "net.ipv6.conf.${WAN_IF}.accept_ra = 2"
-    fi
-} > /etc/sysctl.d/91-vpn-forward.conf
-sysctl -p /etc/sysctl.d/91-vpn-forward.conf >/dev/null
+# Маршрутизация не нужна (Xray — прокси): выключаем её явно.
+rm -f /etc/sysctl.d/91-vpn-forward.conf
+printf 'net.ipv4.ip_forward = 0\nnet.ipv6.conf.all.forwarding = 0\n' > /etc/sysctl.d/91-no-forward.conf
+sysctl -p /etc/sysctl.d/91-no-forward.conf >/dev/null
 
 # fail2ban создаёт свои таблицы в nftables — после flush ruleset перезапускаем.
 systemctl is-active --quiet fail2ban && systemctl restart fail2ban
