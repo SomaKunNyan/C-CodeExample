@@ -197,7 +197,10 @@ def build_server():
             {
                 "tag": "direct",
                 "protocol": "freedom",
-                "settings": {"targetStrategy": target_strategy, "finalRules": final_rules},
+                "settings": {"finalRules": final_rules},
+                # В Xray v26 стратегия разрешения имён для freedom задаётся в sockopt
+                # (freedom.domainStrategy / targetStrategy устарели).
+                "streamSettings": {"sockopt": {"domainStrategy": target_strategy}},
             },
             {"tag": "block", "protocol": "blackhole"},
         ],
