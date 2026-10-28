@@ -9,6 +9,8 @@
 #    vpn-user.sh unlock <user>         — разблокировать
 #    vpn-user.sh del <user>            — удалить
 #    vpn-user.sh list                  — пользователи, трафик, кто онлайн и с каких IP
+#    vpn-user.sh selftest <user>       — подключиться к серверу с ключами пользователя
+#                                        прямо с сервера (проверка без телефона и сети)
 # =============================================================================
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -17,7 +19,7 @@ require_root
 load_config
 require_reality
 
-usage() { sed -n '3,12p' "$0" | sed 's/^#  \{0,1\}//'; exit 1; }
+usage() { sed -n '3,14p' "$0" | sed 's/^#  \{0,1\}//'; exit 1; }
 
 check_name() {
     [[ ${1:-} =~ ^[a-z][a-z0-9._-]{1,31}$ ]] || die "Имя: латиница в нижнем регистре, цифры . _ - (2–32 символа)."
@@ -70,6 +72,31 @@ case "$cmd" in
         ;;
     list)
         XRAY_BIN="${XRAY_BIN}" xray_py list
+        ;;
+    selftest)
+        # Настоящий клиент Xray с параметрами из ссылки пользователя подключается к
+        # серверу через 127.0.0.1 и открывает сайт. Успех = сервер, ключи, SNI и
+        # shortId в порядке; значит, проблема в клиентском приложении или в сети.
+        check_name "$user"
+        work="$(mktemp -d)"
+        trap 'kill "${pid:-}" 2>/dev/null; rm -rf "${work}"' EXIT
+        xray_py client-config "$user" | jq '
+            .outbounds[0].settings.vnext[0].address = "127.0.0.1"
+            | .inbounds = [{"tag":"socks","listen":"127.0.0.1","port":10899,"protocol":"socks"}]
+            | .routing.rules = []
+            | .log.loglevel = "debug"' > "${work}/client.json"
+        "${XRAY_BIN}" run -config "${work}/client.json" > "${work}/client.log" 2>&1 &
+        pid=$!
+        sleep 2
+        if ip="$(curl -s --max-time 15 -x socks5h://127.0.0.1:10899 https://ifconfig.me)" && [[ -n $ip ]]; then
+            log "Самопроверка пройдена: через VPN виден IP ${ip}."
+            log "Сервер и ключи в порядке — ищите причину в клиенте (настройки, TLS-трюки) или в сети."
+        else
+            warn "Самопроверка НЕ пройдена. Журнал клиента:"
+            grep -Ei 'reality|error|fail|warn' "${work}/client.log" | tail -n 20
+            warn "Журнал сервера: journalctl -u xray -n 50 --no-pager"
+            exit 1
+        fi
         ;;
     *) usage ;;
 esac

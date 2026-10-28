@@ -175,7 +175,9 @@ def build_server():
                     "network": "raw",
                     "security": "reality",
                     "realitySettings": {
-                        "show": False,
+                        # Подробности проверки REALITY (SNI, shortId, ключ) — в журнал;
+                        # только при XRAY_LOGLEVEL=debug.
+                        "show": env("XRAY_LOGLEVEL", "warning") == "debug",
                         "target": env("REALITY_DEST", required=True),
                         "xver": 0,
                         "serverNames": server_names(),
