@@ -105,7 +105,7 @@ xray_py() { python3 "${PROJECT_DIR}/scripts/xray-vpn.py" "$@"; }
 # Пересобрать config.json из users.json/keys.json, проверить и перезапустить Xray.
 xray_apply() {
     local tmp
-    tmp="$(mktemp)"
+    tmp="$(mktemp --suffix=.json)"   # Xray определяет формат по расширению
     xray_py server > "$tmp"
     if ! "${XRAY_BIN}" run -test -config "$tmp" >/dev/null 2>&1; then
         "${XRAY_BIN}" run -test -config "$tmp" || true
