@@ -219,8 +219,10 @@ def client_params(u):
 def build_link(u):
     p = client_params(u)
     host = f"[{p['host']}]" if ":" in p["host"] else p["host"]
+    # "encryption" и "headerType" не указываем: по стандарту ссылок VLESS
+    # по умолчанию это "none", а клиенты на sing-box (Hiddify, NekoBox, Karing)
+    # переносят "encryption" в свой конфиг и падают с "unknown field".
     q = urllib.parse.urlencode({
-        "encryption": "none",
         "flow": "xtls-rprx-vision",
         "security": "reality",
         "sni": p["sni"],
@@ -228,7 +230,6 @@ def build_link(u):
         "pbk": p["pbk"],
         "sid": p["sid"],
         "type": "tcp",
-        "headerType": "none",
     })
     tag = urllib.parse.quote(f"{u['name']}@{p['host']}")
     return f"vless://{p['id']}@{host}:{p['port']}?{q}#{tag}"

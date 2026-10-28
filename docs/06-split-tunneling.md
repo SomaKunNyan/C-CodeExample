@@ -43,6 +43,10 @@ sudo ./scripts/vpn-user.sh client-config ivan > ivan.json
 «Custom config») или запускается на Linux как `xray run -c ivan.json` (SOCKS5 на `127.0.0.1:10808`,
 HTTP-прокси на `127.0.0.1:10809`).
 
+Это конфиг **в формате Xray**: его понимают только приложения на ядре Xray (v2rayN, v2rayNG,
+`xray` на Linux). Приложения на ядре **sing-box** (Hiddify, NekoBox, Karing, sing-box) его не
+примут — для них используйте ссылку `vless://` и способы 1–2.
+
 Файл содержит ключ доступа пользователя — передавайте его так же бережно, как ссылку.
 
 ## Проверка
