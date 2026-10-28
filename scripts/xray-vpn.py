@@ -8,7 +8,7 @@
 
 Параметры сервера берутся из переменных окружения (их экспортирует lib.sh
 из config.env): XRAY_PORT, REALITY_DEST, REALITY_SERVER_NAMES, VPN_DOMAIN,
-WAN_IPV4, WAN_IPV6, BLOCK_BITTORRENT, XRAY_ACCESS_LOG, XRAY_API_PORT,
+WAN_IPV4, WAN_IPV6, BLOCK_BITTORRENT, XRAY_ACCESS_LOG, XRAY_LOGLEVEL, XRAY_API_PORT,
 CLIENT_FINGERPRINT, SPLIT_EXCLUDE_FILE, CLIENT_DIRECT_RU.
 
 Команды:
@@ -140,7 +140,8 @@ def build_server():
 
     return {
         "log": {
-            "loglevel": "warning",
+            # debug/info — для диагностики подключений (ошибки REALITY видны только там).
+            "loglevel": env("XRAY_LOGLEVEL", "warning"),
             # Журнал доступа = история посещённых сайтов. По умолчанию выключен.
             "access": "" if env("XRAY_ACCESS_LOG", "no") == "yes" else "none",
         },
@@ -205,6 +206,12 @@ def build_server():
 def client_params(u):
     k = keys()
     host = env("VPN_DOMAIN") or env("WAN_IPV4", required=True)
+    try:
+        if not ipaddress.ip_address(host).is_global:
+            die(f"адрес сервера {host} — внутренний (VPS за NAT хостера). Задайте в config.env "
+                "VPN_DOMAIN или публичный IP в WAN_IPV4.")
+    except ValueError:
+        pass  # домен
     return {
         "host": host,
         "port": int(env("XRAY_PORT", "443")),

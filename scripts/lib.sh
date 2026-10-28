@@ -43,6 +43,7 @@ load_config() {
     : "${XRAY_VERSION:=latest}" "${XRAY_PORT:=443}" "${XRAY_API_PORT:=10085}"
     : "${REALITY_DEST:=}" "${REALITY_SERVER_NAMES:=}" "${CLIENT_FINGERPRINT:=chrome}"
     : "${BLOCK_BITTORRENT:=yes}" "${XRAY_ACCESS_LOG:=no}" "${CLIENT_DIRECT_RU:=no}"
+    : "${XRAY_LOGLEVEL:=warning}"
     : "${SPLIT_EXCLUDE_FILE:=${PROJECT_DIR}/split-exclude.txt}"
 
     ip link show dev "${WAN_IF}" >/dev/null 2>&1 \
@@ -51,6 +52,9 @@ load_config() {
     if [[ -z ${WAN_IPV4} ]]; then
         WAN_IPV4="$(ip -4 -o addr show dev "${WAN_IF}" scope global | awk '{print $4}' | cut -d/ -f1 | head -n1)"
         [[ -n ${WAN_IPV4} ]] || die "Не удалось определить IPv4 на ${WAN_IF}; задайте WAN_IPV4."
+        if python3 -c 'import ipaddress,sys; sys.exit(ipaddress.ip_address(sys.argv[1]).is_global)' "${WAN_IPV4}"; then
+            warn "На ${WAN_IF} внутренний адрес ${WAN_IPV4} (VPS за NAT хостера): укажите публичный IP в WAN_IPV4."
+        fi
     fi
     if [[ -z ${WAN_IPV6} ]]; then
         WAN_IPV6="$(ip -6 -o addr show dev "${WAN_IF}" scope global -deprecated 2>/dev/null \
@@ -58,7 +62,7 @@ load_config() {
     fi
     export VPN_DOMAIN WAN_IF WAN_IPV4 WAN_IPV6 ADMIN_USER SSH_PORT XRAY_VERSION XRAY_PORT \
            XRAY_API_PORT REALITY_DEST REALITY_SERVER_NAMES CLIENT_FINGERPRINT BLOCK_BITTORRENT \
-           XRAY_ACCESS_LOG CLIENT_DIRECT_RU SPLIT_EXCLUDE_FILE
+           XRAY_ACCESS_LOG XRAY_LOGLEVEL CLIENT_DIRECT_RU SPLIT_EXCLUDE_FILE
 }
 
 # Резервная копия файла перед перезаписью.
