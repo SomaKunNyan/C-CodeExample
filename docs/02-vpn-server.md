@@ -87,6 +87,33 @@ curl -sI --http2 https://www.example.fi/ -o /dev/null -w '%{http_version}\n'   #
 dig +short www.example.fi | head -1 | xargs whois | grep -Ei 'netname|org-name|country'
 ```
 
+### Вариант: свой сайт-заглушка (`REALITY_SELF_SITE="yes"`)
+
+Вместо чужого сайта REALITY может маскироваться под **собственный небольшой сайт на вашем домене**:
+
+```
+Посетитель / сканер ──TCP/443──▶ Xray ──(нет ключа клиента)──▶ nginx 127.0.0.1:8443 ── сайт на VPN_DOMAIN
+Клиент VPN ─────────TCP/443──▶ Xray ──(ключ верен)──▶ VLESS → интернет
+Порт 80 ────────────────────▶ nginx: Let's Encrypt + редирект на https://VPN_DOMAIN
+```
+
+Плюсы: SNI в подключениях — **ваш домен, который действительно указывает на IP сервера** (у чужого
+сайта IP другой); не зависите от доступности и настроек постороннего сайта; браузер на
+`https://ваш-домен` показывает обычный сайт небольшой компании с настоящим сертификатом.
+
+Что нужно в `config.env`:
+```
+REALITY_SELF_SITE="yes"
+VPN_DOMAIN="softiai.shop"       # A-запись -> публичный IP сервера
+ACME_EMAIL="you@example.com"     # уведомления Let's Encrypt
+SITE_TITLE=""                    # название на сайте; пусто = из домена
+```
+Затем `sudo ./scripts/02-firewall.sh` (откроет порт 80) и `sudo ./scripts/03-install-vpn.sh`
+(вызовет `scripts/self-site.sh`: nginx, сайт из `templates/site/`, сертификат с пробным выпуском,
+автопродление). `REALITY_DEST` и `REALITY_SERVER_NAMES` в этом режиме не используются; ссылки
+меняются (SNI = ваш домен) — раздайте новые. Сайт можно заменить своими страницами: файлы в
+`/var/www/vpn-site/` (шаблоны — `templates/site/`).
+
 ## 3. Установка — `03-install-vpn.sh`
 
 В `config.env` задайте как минимум `REALITY_DEST`, затем:

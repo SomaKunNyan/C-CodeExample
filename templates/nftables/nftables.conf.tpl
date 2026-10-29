@@ -41,6 +41,8 @@ table inet filter {
 
         # --- VPN: Xray VLESS + REALITY (TLS 1.3 поверх TCP) ---
         tcp dport ${XRAY_PORT} accept
+        # --- HTTP/80: только при своём сайте-заглушке (Let's Encrypt, редирект) ---
+${NFT_HTTP_RULES}
 
         # --- SSH ---
 ${NFT_SSH_RULES}

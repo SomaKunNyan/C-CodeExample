@@ -78,15 +78,28 @@ fi
 [[ -s ${XRAY_STORE}/users.json ]] || echo '{"users": []}' > "${XRAY_STORE}/users.json"
 chmod 0600 "${XRAY_STORE}/keys.json" "${XRAY_STORE}/users.json"
 
-# --- 3. Проверка сайта для маскировки ----------------------------------------
-dest_host="${REALITY_DEST%:*}"
-log "Проверка REALITY_DEST=${REALITY_DEST}"
-ping_out="$("${XRAY_BIN}" tls ping "${dest_host}" 2>&1 || true)"
+# --- 3. Сайт для маскировки ---------------------------------------------------
+if [[ ${REALITY_SELF_SITE} == yes ]]; then
+    log "Свой сайт-заглушка ${VPN_DOMAIN} (nginx + Let's Encrypt)"
+    bash "${PROJECT_DIR}/scripts/self-site.sh"
+fi
+
+dest_host="${REALITY_DEST%:*}" dest_port="${REALITY_DEST##*:}"
+log "Проверка сайта для маскировки: ${REALITY_SNI} (${REALITY_DEST})"
+if [[ ${dest_host} =~ ^[0-9.]+$ ]]; then
+    # Цель задана IP-адресом (свой сайт на 127.0.0.1): подключаемся к нему с SNI = REALITY_SNI.
+    ping_out="$("${XRAY_BIN}" tls ping -ip "${dest_host}" "${REALITY_SNI}:${dest_port}" 2>&1 || true)"
+    curl_target=(--noproxy '*' --resolve "${REALITY_SNI}:${dest_port}:${dest_host}" "https://${REALITY_SNI}:${dest_port}/")
+else
+    ping_out="$("${XRAY_BIN}" tls ping "${dest_host}:${dest_port}" 2>&1 || true)"
+    curl_target=("https://${dest_host}:${dest_port}/")
+fi
+dest_host="${REALITY_SNI}"
 if ! grep -q 'TLS Version:[[:space:]]*TLS 1.3' <<<"${ping_out}"; then
     echo "${ping_out}" | tail -n 15
     die "${dest_host} не отвечает по TLS 1.3 — выберите другой сайт (см. docs/02-vpn-server.md)."
 fi
-h2="$(curl -s -o /dev/null --max-time 10 --http2 -w '%{http_version}' "https://${dest_host}/" || true)"
+h2="$(curl -s -o /dev/null --max-time 10 --http2 -w '%{http_version}' "${curl_target[@]}" || true)"
 if [[ ${h2} != 2 ]]; then
     # XHTTP поверх REALITY идёт по HTTP/2: сайт-маскировка обязан его поддерживать.
     [[ ${XRAY_TRANSPORT} == xhttp ]] \

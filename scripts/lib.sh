@@ -50,6 +50,7 @@ load_config() {
     : "${BLOCK_BITTORRENT:=yes}" "${XRAY_ACCESS_LOG:=no}" "${CLIENT_DIRECT_RU:=no}"
     : "${XRAY_LOGLEVEL:=warning}" "${PUBLIC_IPV4:=}" "${LINK_ADDRESS:=ip}"
     : "${XRAY_TRANSPORT:=xhttp}" "${XHTTP_MODE:=auto}" "${XHTTP_PATH:=}"
+    : "${REALITY_SELF_SITE:=no}" "${ACME_EMAIL:=}" "${SELF_SITE_PORT:=8443}" "${SITE_TITLE:=}"
     case "${XRAY_TRANSPORT}" in xhttp|vision) ;; *) die "XRAY_TRANSPORT=${XRAY_TRANSPORT}: допустимо xhttp или vision." ;; esac
     case "${XHTTP_MODE}" in auto|packet-up|stream-up|stream-one) ;; *) die "XHTTP_MODE=${XHTTP_MODE}: допустимо auto, packet-up, stream-up, stream-one." ;; esac
     : "${SPLIT_EXCLUDE_FILE:=${PROJECT_DIR}/split-exclude.txt}"
@@ -86,7 +87,7 @@ load_config() {
     export VPN_DOMAIN WAN_IF WAN_IPV4 WAN_IPV6 ADMIN_USER SSH_PORT XRAY_VERSION XRAY_PORT \
            XRAY_API_PORT REALITY_DEST REALITY_SERVER_NAMES CLIENT_FINGERPRINT BLOCK_BITTORRENT \
            XRAY_ACCESS_LOG XRAY_LOGLEVEL CLIENT_DIRECT_RU SPLIT_EXCLUDE_FILE PUBLIC_IPV4 LINK_ADDRESS \
-           XRAY_TRANSPORT XHTTP_MODE XHTTP_PATH
+           XRAY_TRANSPORT XHTTP_MODE XHTTP_PATH REALITY_SELF_SITE ACME_EMAIL SELF_SITE_PORT SITE_TITLE
 }
 
 # Резервная копия файла перед перезаписью.
@@ -118,10 +119,19 @@ install_file() {
 }
 
 # Параметры REALITY нужны только шагу 03 и управлению пользователями.
+# REALITY_SNI — имя, которое клиент отправляет в SNI (первое из serverNames).
 require_reality() {
+    if [[ ${REALITY_SELF_SITE} == yes ]]; then
+        # Свой сайт-заглушка (scripts/self-site.sh): nginx на 127.0.0.1, SNI = свой домен.
+        [[ -n ${VPN_DOMAIN} ]] || die "REALITY_SELF_SITE=\"yes\" требует VPN_DOMAIN (A-запись -> IP сервера)."
+        REALITY_DEST="127.0.0.1:${SELF_SITE_PORT}"
+        REALITY_SERVER_NAMES="${VPN_DOMAIN}"
+    fi
     [[ -n ${REALITY_DEST} ]] || die "Задайте REALITY_DEST в ${CONFIG_FILE} (см. docs/02-vpn-server.md, «Выбор сайта для маскировки»)."
     [[ ${REALITY_DEST} == *:* ]] || REALITY_DEST="${REALITY_DEST}:443"
-    export REALITY_DEST
+    REALITY_SNI="${REALITY_SERVER_NAMES%% *}"
+    REALITY_SNI="${REALITY_SNI:-${REALITY_DEST%:*}}"
+    export REALITY_DEST REALITY_SERVER_NAMES REALITY_SNI
 }
 
 XRAY_BIN=/usr/local/bin/xray

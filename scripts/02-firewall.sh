@@ -33,12 +33,17 @@ else
     NFT_SSH_RULES+="$(ssh_rule_open)"$'\n'
 fi
 
-export NFT_SSH_RULES
+# Порт 80 — только для своего сайта-заглушки (Let's Encrypt + редирект на HTTPS).
+NFT_HTTP_RULES=""
+if [[ ${REALITY_SELF_SITE} == yes ]]; then
+    NFT_HTTP_RULES="        tcp dport 80 accept"
+fi
+export NFT_SSH_RULES NFT_HTTP_RULES
 
 # --- Генерация и проверка --------------------------------------------------------
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
-envsubst '${XRAY_PORT} ${NFT_SSH_RULES}' \
+envsubst '${XRAY_PORT} ${NFT_SSH_RULES} ${NFT_HTTP_RULES}' \
     < "${TEMPLATES_DIR}/nftables/nftables.conf.tpl" > "$tmp"
 nft -c -f "$tmp" || die "Синтаксическая ошибка в сгенерированных правилах ($tmp)."
 

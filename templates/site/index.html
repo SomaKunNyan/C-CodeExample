@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${SITE_TITLE} — software development</title>
+<meta name="description" content="${SITE_TITLE}: small team building web services, APIs and automation.">
+<style>
+  :root { --fg:#1d2330; --muted:#5b6475; --bg:#fbfbfd; --accent:#2f6fde; --line:#e3e6ee; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.6 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color:var(--fg); background:var(--bg); }
+  .wrap { max-width:960px; margin:0 auto; padding:0 20px; }
+  header { border-bottom:1px solid var(--line); background:#fff; }
+  header .wrap { display:flex; align-items:center; justify-content:space-between; height:64px; }
+  .logo { font-weight:700; font-size:20px; letter-spacing:.2px; }
+  nav a { color:var(--muted); text-decoration:none; margin-left:22px; }
+  .hero { padding:72px 0 48px; }
+  .hero h1 { font-size:38px; line-height:1.2; margin:0 0 14px; }
+  .hero p { color:var(--muted); font-size:18px; max-width:620px; margin:0; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:18px; padding:12px 0 56px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:22px; }
+  .card h3 { margin:0 0 8px; font-size:17px; }
+  .card p { margin:0; color:var(--muted); font-size:15px; }
+  section h2 { font-size:24px; margin:0 0 14px; }
+  .contact { padding:8px 0 64px; color:var(--muted); }
+  .contact a { color:var(--accent); }
+  footer { border-top:1px solid var(--line); color:var(--muted); font-size:14px; padding:22px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="logo">${SITE_TITLE}</div>
+    <nav><a href="#services">Services</a><a href="#contact">Contact</a></nav>
+  </div>
+</header>
+<main class="wrap">
+  <section class="hero">
+    <h1>Reliable software for growing businesses</h1>
+    <p>We design and build web services, internal tools and integrations — from the first prototype to stable production.</p>
+  </section>
+  <section id="services">
+    <h2>Services</h2>
+    <div class="grid">
+      <div class="card"><h3>Web applications</h3><p>Fast, accessible interfaces and the back-end services behind them.</p></div>
+      <div class="card"><h3>APIs &amp; integrations</h3><p>Connecting payment, CRM and logistics systems into one workflow.</p></div>
+      <div class="card"><h3>Automation</h3><p>Reports, data pipelines and routine tasks that run themselves.</p></div>
+      <div class="card"><h3>Support</h3><p>Monitoring, updates and on-call maintenance for existing systems.</p></div>
+    </div>
+  </section>
+  <section id="contact" class="contact">
+    <h2>Contact</h2>
+    <p>Tell us about your project: <a href="mailto:hello@${VPN_DOMAIN}">hello@${VPN_DOMAIN}</a></p>
+  </section>
+</main>
+<footer><div class="wrap">&copy; ${SITE_YEAR} ${SITE_TITLE}</div></footer>
+</body>
+</html>

@@ -9,7 +9,7 @@ VPN-сервер на **Xray: VLESS + REALITY** (транспорт **XHTTP** и
 | VPN-протокол | **VLESS**, сервер [Xray-core](https://github.com/XTLS/Xray-core); транспорт **XHTTP** (HTTP/2-запросы, по умолчанию) или **XTLS Vision** (`XRAY_TRANSPORT`) |
 | Транспорт | **REALITY**: TLS 1.3 на TCP/443 с SNI и сертификатом настоящего постороннего сайта, отпечаток Chrome |
 | Шифрование | TLS 1.3 (x25519 / X25519MLKEM768, AES-GCM / ChaCha20-Poly1305), PFS |
-| Скрытность | без ключа клиента сервер неотличим от сайта-маскировки — и для сканеров, и для активных проверок DPI |
+| Скрытность | без ключа клиента сервер неотличим от сайта-маскировки — и для сканеров, и для активных проверок DPI; можно маскироваться под чужой сайт или под **свой сайт-заглушку** (`REALITY_SELF_SITE`) |
 | Сертификат / домен | не нужны (домен — по желанию, для удобной смены IP) |
 | Пользователи | UUID на пользователя, ссылки `vless://` и QR-коды, блокировка/перевыпуск, трафик и онлайн по каждому |
 | Исключения | сайты мимо VPN — по доменам, на стороне клиента (`split-exclude.txt`, «регион Россия» в Hiddify) |
@@ -84,12 +84,14 @@ sudo apt purge ocserv certbot         # по желанию, после пров
 │   ├── 01-harden-system.sh        # hardening Debian
 │   ├── 02-firewall.sh             # nftables, применение с откатом
 │   ├── 03-install-vpn.sh          # Xray (проверка SHA-256), ключи REALITY, unbound
+│   ├── self-site.sh               # свой сайт-заглушка для REALITY: nginx + Let's Encrypt
 │   ├── 04-tune-performance.sh     # sysctl, NIC, CPU
 │   ├── vpn-user.sh                # пользователи: ссылки, QR, блокировка, статистика
 │   ├── xray-vpn.py                # генератор конфигов сервера/клиентов и ссылок
 │   ├── vpn-nic-tune               # тюнинг NIC (запускается systemd при загрузке)
 │   └── healthcheck.sh             # проверка состояния (код возврата для мониторинга)
-├── templates/                     # шаблоны конфигураций (nftables, sshd, sysctl, systemd, ...)
+├── templates/                     # шаблоны конфигураций (nftables, sshd, sysctl, systemd, nginx, ...)
+│   └── site/                      # страницы сайта-заглушки (index, 404, robots.txt)
 └── docs/
     ├── 01-security-baseline.md    # первоначальная настройка безопасности
     ├── 02-vpn-server.md           # Xray VLESS + REALITY: как работает, установка, пользователи

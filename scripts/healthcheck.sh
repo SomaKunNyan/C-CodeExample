@@ -28,16 +28,30 @@ chk "API Xray только на localhost"        bash -c "ss -Htln 'sport = :${
 
 echo "== REALITY"
 chk "конфигурация Xray валидна" "${XRAY_BIN}" run -test -config "${XRAY_STORE}/config.json"
-if [[ -n ${REALITY_DEST} ]]; then
-    dest_host="${REALITY_DEST%:*}"
+if [[ -n ${REALITY_DEST} || ${REALITY_SELF_SITE} == yes ]]; then
+    require_reality
+    dest_host="${REALITY_SNI}"
     # Без ключа клиента сервер должен вести себя как сайт-маскировка:
     # отдавать его настоящий сертификат по TLS 1.3.
     proto="$(timeout 5 openssl s_client -connect "127.0.0.1:${XRAY_PORT}" -servername "${dest_host}" </dev/null 2>/dev/null \
              | awk -F': *' '/Protocol *:/{print $2; exit}')"
     if [[ $proto == TLSv1.3 ]]; then ok "без ключа сервер выглядит как ${dest_host} (TLS 1.3)"
     else bad "TLS-рукопожатие с маскировкой ${dest_host}: '${proto:-нет ответа}'"; fi
-    chk "сайт-маскировка ${dest_host} доступен с сервера" \
-        timeout 10 curl -s -o /dev/null --http2 "https://${dest_host}/"
+    if [[ ${REALITY_SELF_SITE} == yes ]]; then
+        chk "nginx (сайт-заглушка) активен" systemctl is-active --quiet nginx
+        chk "сайт-заглушка отвечает по HTTP/2" bash -c "[[ \$(curl -s --noproxy '*' -o /dev/null -w '%{http_code} %{http_version}' --http2 --max-time 10 \
+            --resolve '${dest_host}:${SELF_SITE_PORT}:127.0.0.1' 'https://${dest_host}:${SELF_SITE_PORT}/') == '200 2' ]]"
+        cert="/etc/letsencrypt/live/${VPN_DOMAIN}/fullchain.pem"
+        if [[ -f $cert ]]; then
+            days=$(( ( $(date -d "$(openssl x509 -enddate -noout -in "$cert" | cut -d= -f2)" +%s) - $(date +%s) ) / 86400 ))
+            if (( days > 14 )); then ok "сертификат ${VPN_DOMAIN}: ещё ${days} дн."; else bad "сертификат ${VPN_DOMAIN} истекает через ${days} дн."; fi
+        else
+            bad "нет сертификата ${cert}"
+        fi
+    else
+        chk "сайт-маскировка ${dest_host} доступен с сервера" \
+            timeout 10 curl -s -o /dev/null --http2 "https://${dest_host}/"
+    fi
 fi
 
 echo "== Сеть"
