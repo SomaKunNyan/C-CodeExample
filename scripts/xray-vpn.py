@@ -10,7 +10,8 @@
 из config.env): XRAY_PORT, REALITY_DEST, REALITY_SERVER_NAMES, VPN_DOMAIN,
 WAN_IPV4, WAN_IPV6, BLOCK_BITTORRENT, XRAY_ACCESS_LOG, XRAY_LOGLEVEL, XRAY_API_PORT,
 CLIENT_FINGERPRINT, SPLIT_EXCLUDE_FILE, CLIENT_DIRECT_RU, PUBLIC_IPV4, LINK_ADDRESS,
-XRAY_TRANSPORT (xhttp | vision), XHTTP_PATH, XHTTP_MODE.
+XRAY_TRANSPORT (xhttp | vision), XHTTP_PATH, XHTTP_MODE,
+CDN_ENABLE, CDN_DOMAIN, CDN_XRAY_PORT, CDN_PATH.
 
 Команды:
     server                      конфиг сервера -> stdout
@@ -18,8 +19,8 @@ XRAY_TRANSPORT (xhttp | vision), XHTTP_PATH, XHTTP_MODE.
     add NAME UUID               добавить пользователя
     set NAME enabled|disabled   включить/выключить
     del NAME                    удалить
-    link NAME                   ссылка vless:// для клиента
-    client-config NAME          полный JSON-конфиг клиента Xray с исключениями
+    link NAME [cdn]             ссылка vless:// для клиента (cdn — вариант через CDN)
+    client-config NAME [cdn]    полный JSON-конфиг клиента Xray с исключениями
     list                        таблица: пользователи, трафик, онлайн и IP (через API Xray)
 """
 
@@ -137,6 +138,18 @@ def xhttp_path():
     return p if p.startswith("/") else "/" + p
 
 
+def cdn_enabled():
+    return env("CDN_ENABLE", "no") == "yes"
+
+
+def cdn_path():
+    """Путь XHTTP для входа через CDN (отдельный от прямого)."""
+    p = env("CDN_PATH", "")
+    if not p:
+        p = "/" + hashlib.sha256((keys()["publicKey"] + "/cdn").encode()).hexdigest()[:16]
+    return p if p.startswith("/") else "/" + p
+
+
 def stream_base():
     """Транспортная часть streamSettings (без security), общая для сервера и клиента."""
     if transport() == "xhttp":
@@ -222,7 +235,7 @@ def build_server():
                     "routeOnly": True,
                 },
             }
-        ],
+        ] + ([cdn_inbound(clients)] if cdn_enabled() else []),
         "outbounds": [
             {
                 "tag": "direct",
@@ -236,6 +249,32 @@ def build_server():
         ],
         "routing": {"domainStrategy": "AsIs", "rules": rules},
     }
+
+
+def cdn_inbound(clients):
+    """Вход для трафика через CDN: Cloudflare -> 443 (REALITY не узнаёт SNI CDN-домена
+    и передаёт соединение сайту-заглушке) -> nginx (TLS, CDN_DOMAIN) -> этот вход.
+    Без TLS и только на 127.0.0.1: шифрование до сервера обеспечивают CDN и nginx."""
+    return {
+        "tag": "vless-cdn",
+        "listen": "127.0.0.1",
+        "port": int(env("CDN_XRAY_PORT", "10444")),
+        "protocol": "vless",
+        # Vision работает только поверх RAW — здесь XHTTP, поэтому flow пустой.
+        "settings": {"clients": [dict(c, flow="") for c in clients], "decryption": "none"},
+        "streamSettings": {
+            "network": "xhttp",
+            "xhttpSettings": {"path": cdn_path(), "mode": "auto"},
+            "security": "none",
+        },
+        "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": True},
+    }
+
+
+def cdn_params(u):
+    d = env("CDN_DOMAIN") or die("CDN_ENABLE=yes, но CDN_DOMAIN не задан (config.env)")
+    return {"host": d, "port": 443, "id": u["id"], "sni": d,
+            "fp": env("CLIENT_FINGERPRINT", "chrome")}
 
 
 def client_params(u):
@@ -258,7 +297,17 @@ def client_params(u):
     }
 
 
-def build_link(u):
+def build_link(u, variant=""):
+    if variant == "cdn":
+        p = cdn_params(u)
+        # Через CDN: обычный TLS к узлу Cloudflare (SNI = CDN-домен), XHTTP packet-up —
+        # CDN пересылает отдельные HTTP-запросы и не любит длинные потоковые загрузки.
+        q = urllib.parse.urlencode({
+            "security": "tls", "sni": p["sni"], "fp": p["fp"], "alpn": "h2,http/1.1",
+            "type": "xhttp", "host": p["host"], "path": cdn_path(), "mode": "packet-up",
+        }, quote_via=urllib.parse.quote)
+        tag = urllib.parse.quote(f"{u['name']}@{p['host']} (CDN)")
+        return f"vless://{p['id']}@{p['host']}:{p['port']}?{q}#{tag}"
     p = client_params(u)
     host = f"[{p['host']}]" if ":" in p["host"] else p["host"]
     # "encryption" и "headerType" не указываем: по стандарту ссылок VLESS
@@ -288,8 +337,28 @@ def client_stream_base():
     return s
 
 
-def build_client(u):
-    p = client_params(u)
+def build_client(u, variant=""):
+    if variant == "cdn":
+        c = cdn_params(u)
+        proxy_stream = {
+            "network": "xhttp",
+            "xhttpSettings": {"host": c["host"], "path": cdn_path(), "mode": "packet-up"},
+            "security": "tls",
+            "tlsSettings": {"serverName": c["sni"], "fingerprint": c["fp"], "alpn": ["h2", "http/1.1"]},
+        }
+        p = {"host": c["host"], "port": c["port"], "id": c["id"]}
+        user_flow = ""
+    else:
+        p = client_params(u)
+        proxy_stream = {
+            **client_stream_base(),
+            "security": "reality",
+            "realitySettings": {
+                "serverName": p["sni"], "fingerprint": p["fp"],
+                "publicKey": p["pbk"], "shortId": p["sid"], "spiderX": "/",
+            },
+        }
+        user_flow = flow()
     domains, nets = split_list()
     rules = [{"ip": ["geoip:private"], "outboundTag": "direct"}]
     if domains:
@@ -317,16 +386,9 @@ def build_client(u):
                 "protocol": "vless",
                 "settings": {"vnext": [{
                     "address": p["host"], "port": p["port"],
-                    "users": [{"id": p["id"], "encryption": "none", "flow": flow()}],
+                    "users": [{"id": p["id"], "encryption": "none", "flow": user_flow}],
                 }]},
-                "streamSettings": {
-                    **client_stream_base(),
-                    "security": "reality",
-                    "realitySettings": {
-                        "serverName": p["sni"], "fingerprint": p["fp"],
-                        "publicKey": p["pbk"], "shortId": p["sid"], "spiderX": "/",
-                    },
-                },
+                "streamSettings": proxy_stream,
             },
             {"tag": "direct", "protocol": "freedom"},
             {"tag": "block", "protocol": "blackhole"},
@@ -418,11 +480,14 @@ def main(argv):
             die(f"нет пользователя {name}")
         save(USERS, data)
     elif cmd == "link":
-        print(build_link(find(args[0])))
+        print(build_link(find(args[0]), args[1] if len(args) > 1 else ""))
+    elif cmd == "cdn-path":
+        print(cdn_path())
     elif cmd == "list":
         print_table()
     elif cmd == "client-config":
-        print(json.dumps(build_client(find(args[0])), indent=2, ensure_ascii=False))
+        print(json.dumps(build_client(find(args[0]), args[1] if len(args) > 1 else ""),
+                         indent=2, ensure_ascii=False))
     else:
         print(__doc__)
         return 1

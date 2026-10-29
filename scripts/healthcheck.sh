@@ -54,6 +54,14 @@ if [[ -n ${REALITY_DEST} || ${REALITY_SELF_SITE} == yes ]]; then
     fi
 fi
 
+if [[ ${CDN_ENABLE} == yes ]]; then
+    echo "== CDN (${CDN_DOMAIN})"
+    chk "вход Xray для CDN слушает 127.0.0.1:${CDN_XRAY_PORT}" bash -c "ss -Htln 'sport = :${CDN_XRAY_PORT}' | grep -q '127.0.0.1:'"
+    # Полный путь: интернет -> Cloudflare -> 443 -> REALITY (чужой SNI) -> nginx.
+    chk "https://${CDN_DOMAIN}/ открывается через CDN" \
+        bash -c "[[ \$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 'https://${CDN_DOMAIN}/') == 200 ]]"
+fi
+
 echo "== Сеть"
 chk "BBR"                         bash -c "[[ \$(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]"
 chk "политика input = drop"       bash -c "nft list chain inet filter input | grep -q 'policy drop'"

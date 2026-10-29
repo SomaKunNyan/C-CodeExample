@@ -51,6 +51,11 @@ load_config() {
     : "${XRAY_LOGLEVEL:=warning}" "${PUBLIC_IPV4:=}" "${LINK_ADDRESS:=ip}"
     : "${XRAY_TRANSPORT:=xhttp}" "${XHTTP_MODE:=auto}" "${XHTTP_PATH:=}"
     : "${REALITY_SELF_SITE:=no}" "${ACME_EMAIL:=}" "${SELF_SITE_PORT:=8443}" "${SITE_TITLE:=}"
+    : "${CDN_ENABLE:=no}" "${CDN_DOMAIN:=}" "${CDN_XRAY_PORT:=10444}" "${CDN_PATH:=}"
+    if [[ ${CDN_ENABLE} == yes ]]; then
+        [[ ${REALITY_SELF_SITE} == yes ]] || die "CDN_ENABLE=\"yes\" работает только вместе с REALITY_SELF_SITE=\"yes\" (nginx и сертификат берутся оттуда)."
+        [[ -n ${CDN_DOMAIN} ]] || die "CDN_ENABLE=\"yes\": задайте CDN_DOMAIN (например, cdn.${VPN_DOMAIN:-ваш-домен})."
+    fi
     case "${XRAY_TRANSPORT}" in xhttp|vision) ;; *) die "XRAY_TRANSPORT=${XRAY_TRANSPORT}: допустимо xhttp или vision." ;; esac
     case "${XHTTP_MODE}" in auto|packet-up|stream-up|stream-one) ;; *) die "XHTTP_MODE=${XHTTP_MODE}: допустимо auto, packet-up, stream-up, stream-one." ;; esac
     : "${SPLIT_EXCLUDE_FILE:=${PROJECT_DIR}/split-exclude.txt}"
@@ -87,7 +92,8 @@ load_config() {
     export VPN_DOMAIN WAN_IF WAN_IPV4 WAN_IPV6 ADMIN_USER SSH_PORT XRAY_VERSION XRAY_PORT \
            XRAY_API_PORT REALITY_DEST REALITY_SERVER_NAMES CLIENT_FINGERPRINT BLOCK_BITTORRENT \
            XRAY_ACCESS_LOG XRAY_LOGLEVEL CLIENT_DIRECT_RU SPLIT_EXCLUDE_FILE PUBLIC_IPV4 LINK_ADDRESS \
-           XRAY_TRANSPORT XHTTP_MODE XHTTP_PATH REALITY_SELF_SITE ACME_EMAIL SELF_SITE_PORT SITE_TITLE
+           XRAY_TRANSPORT XHTTP_MODE XHTTP_PATH REALITY_SELF_SITE ACME_EMAIL SELF_SITE_PORT SITE_TITLE \
+           CDN_ENABLE CDN_DOMAIN CDN_XRAY_PORT CDN_PATH
 }
 
 # Резервная копия файла перед перезаписью.

@@ -3,14 +3,15 @@
 #  Управление пользователями VPN (Xray VLESS + REALITY).
 #    vpn-user.sh add <user>            — создать и показать ссылку + QR-код
 #    vpn-user.sh link <user>           — снова показать ссылку + QR-код
-#    vpn-user.sh client-config <user>  — JSON-конфиг Xray для клиента (с исключениями)
+#    vpn-user.sh client-config <user> [cdn] — JSON-конфиг Xray для клиента (с исключениями)
 #    vpn-user.sh reset <user>          — новый UUID (старая ссылка перестанет работать)
 #    vpn-user.sh lock <user>           — заблокировать (сразу отключает)
 #    vpn-user.sh unlock <user>         — разблокировать
 #    vpn-user.sh del <user>            — удалить
 #    vpn-user.sh list                  — пользователи, трафик, кто онлайн и с каких IP
-#    vpn-user.sh selftest <user>       — подключиться к серверу с ключами пользователя
-#                                        прямо с сервера (проверка без телефона и сети)
+#    vpn-user.sh selftest <user> [cdn] — подключиться к серверу с ключами пользователя
+#                                        прямо с сервера (проверка без телефона и сети);
+#                                        cdn — через Cloudflare (полный путь CDN -> сервер)
 # =============================================================================
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -26,14 +27,19 @@ check_name() {
 }
 
 show_link() {
-    local link
-    link="$(xray_py link "$1")"
-    echo
-    log "Ссылка для клиента ${1} (импорт: «из буфера обмена» или сканированием QR):"
-    echo
-    echo "${link}"
-    echo
-    qrencode -t ANSIUTF8 "${link}"
+    local link variant title
+    for variant in "" ${CDN_ENABLE/#yes/cdn}; do
+        [[ $variant == no ]] && continue
+        link="$(xray_py link "$1" ${variant:+"$variant"})"
+        title="REALITY — напрямую на сервер"
+        [[ $variant == cdn ]] && title="CDN (${CDN_DOMAIN}) — запасной вариант, если прямое подключение режется"
+        echo
+        log "Ссылка для ${1}: ${title}"
+        echo
+        echo "${link}"
+        echo
+        qrencode -t ANSIUTF8 "${link}"
+    done
     warn "Ссылка = доступ к VPN. Передавайте её только владельцу, по защищённому каналу."
 }
 
@@ -49,7 +55,7 @@ case "$cmd" in
         check_name "$user"; show_link "$user"
         ;;
     client-config)
-        check_name "$user"; xray_py client-config "$user"
+        check_name "$user"; xray_py client-config "$user" ${3:+"$3"}
         ;;
     reset)
         check_name "$user"
@@ -78,13 +84,20 @@ case "$cmd" in
         # серверу через 127.0.0.1 и открывает сайт. Успех = сервер, ключи, SNI и
         # shortId в порядке; значит, проблема в клиентском приложении или в сети.
         check_name "$user"
+        variant="${3:-}"
+        [[ -z $variant || $variant == cdn ]] || die "selftest <user> [cdn]"
+        [[ $variant != cdn || ${CDN_ENABLE} == yes ]] || die "CDN не включён (CDN_ENABLE)."
         work="$(mktemp -d)"
         trap 'kill "${pid:-}" 2>/dev/null; rm -rf "${work}"' EXIT
-        xray_py client-config "$user" | jq '
-            .outbounds[0].settings.vnext[0].address = "127.0.0.1"
-            | .inbounds = [{"tag":"socks","listen":"127.0.0.1","port":10899,"protocol":"socks"}]
+        # Прямой вариант — к 127.0.0.1 (проверка сервера); CDN — по настоящему адресу
+        # через Cloudflare (проверка всей цепочки CDN -> 443 -> nginx -> Xray).
+        addr_filter='.outbounds[0].settings.vnext[0].address = "127.0.0.1" |'
+        [[ $variant == cdn ]] && addr_filter=""
+        xray_py client-config "$user" ${variant:+"$variant"} | jq "
+            ${addr_filter}
+            .inbounds = [{\"tag\":\"socks\",\"listen\":\"127.0.0.1\",\"port\":10899,\"protocol\":\"socks\"}]
             | .routing.rules = []
-            | .log.loglevel = "debug"' > "${work}/client.json"
+            | .log.loglevel = \"debug\"" > "${work}/client.json"
         "${XRAY_BIN}" run -config "${work}/client.json" > "${work}/client.log" 2>&1 &
         pid=$!
         sleep 2
@@ -93,7 +106,7 @@ case "$cmd" in
             log "Сервер и ключи в порядке — ищите причину в клиенте (настройки, TLS-трюки) или в сети."
         else
             warn "Самопроверка НЕ пройдена. Журнал клиента:"
-            grep -Ei 'reality|error|fail|warn' "${work}/client.log" | tail -n 20
+            grep -Ei 'reality|error|fail|warn|xhttp|tls' "${work}/client.log" | tail -n 20
             warn "Журнал сервера: journalctl -u xray -n 50 --no-pager"
             exit 1
         fi

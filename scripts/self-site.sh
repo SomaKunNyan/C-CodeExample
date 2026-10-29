@@ -26,6 +26,13 @@ resolved="$(dig +short A "${VPN_DOMAIN}" @1.1.1.1 | grep -E '^[0-9.]+$' | head -
 if [[ -n ${PUBLIC_IPV4} && ${resolved} != "${PUBLIC_IPV4}" ]]; then
     die "${VPN_DOMAIN} указывает на '${resolved:-ничего}', а публичный IP сервера ${PUBLIC_IPV4}. Исправьте A-запись — без неё не будет сертификата."
 fi
+if [[ ${CDN_ENABLE} == yes ]]; then
+    # CDN-домен должен быть «оранжевым» (Proxied) в Cloudflare: указывать на адреса CDN, не на сервер.
+    cdn_ip="$(dig +short A "${CDN_DOMAIN}" @1.1.1.1 | grep -E '^[0-9.]+$' | head -n1 || true)"
+    [[ -n ${cdn_ip} ]] || die "${CDN_DOMAIN} не разрешается. Создайте в Cloudflare запись A ${CDN_DOMAIN%%.*} -> ${PUBLIC_IPV4:-IP сервера} (Proxied)."
+    [[ ${cdn_ip} != "${PUBLIC_IPV4}" ]] \
+        || die "${CDN_DOMAIN} указывает прямо на сервер (${cdn_ip}): в Cloudflare включите проксирование (оранжевое облако)."
+fi
 if systemctl is-active --quiet nftables && ! nft list chain inet filter input 2>/dev/null | grep -q 'tcp dport 80 accept'; then
     die "Порт 80 закрыт в nftables. Сначала: sudo ./scripts/02-firewall.sh (при REALITY_SELF_SITE=\"yes\" он откроет 80)."
 fi
@@ -55,13 +62,26 @@ systemctl enable nginx
 systemctl reload-or-restart nginx
 
 # --- 4. Сертификат Let's Encrypt ----------------------------------------------
-if [[ ! -f /etc/letsencrypt/live/${VPN_DOMAIN}/fullchain.pem ]]; then
-    certbot_args=(certonly --webroot -w /var/www/acme --non-interactive --agree-tos
-                  -m "${ACME_EMAIL}" --key-type ecdsa --elliptic-curve secp256r1 -d "${VPN_DOMAIN}")
-    log "Пробный выпуск сертификата (Let's Encrypt staging — не расходует лимиты)"
-    certbot "${certbot_args[@]}" --dry-run \
-        || die "Проверка домена не прошла: A-запись ${VPN_DOMAIN} и доступность порта 80 снаружи (firewall хостера)."
-    log "Выпуск сертификата для ${VPN_DOMAIN}"
+# Один сертификат на основной домен и (если включён CDN) на CDN-домен.
+cert_domains=("${VPN_DOMAIN}")
+[[ ${CDN_ENABLE} == yes ]] && cert_domains+=("${CDN_DOMAIN}")
+cert_file="/etc/letsencrypt/live/${VPN_DOMAIN}/fullchain.pem"
+need_cert=no
+if [[ ! -f ${cert_file} ]]; then
+    need_cert=yes
+else
+    sans="$(openssl x509 -noout -ext subjectAltName -in "${cert_file}" 2>/dev/null || true)"
+    for d in "${cert_domains[@]}"; do grep -q "DNS:${d}\b" <<<"${sans}" || need_cert=yes; done
+fi
+if [[ ${need_cert} == yes ]]; then
+    certbot_args=(certonly --webroot -w /var/www/acme --non-interactive --agree-tos --expand
+                  --cert-name "${VPN_DOMAIN}" -m "${ACME_EMAIL}"
+                  --key-type ecdsa --elliptic-curve secp256r1)
+    for d in "${cert_domains[@]}"; do certbot_args+=(-d "$d"); done
+    log "Пробный выпуск сертификата (Let's Encrypt staging — не расходует лимиты): ${cert_domains[*]}"
+    certbot "${certbot_args[@]}" --dry-run || die "Проверка домена не прошла: A-запись ${VPN_DOMAIN} и доступность порта 80 снаружи (firewall хостера).$(
+        [[ ${CDN_ENABLE} == yes ]] && printf '\n  Для %s: в Cloudflare временно выключите SSL/TLS -> Edge Certificates -> «Always Use HTTPS»\n  (иначе проверка уходит на HTTPS, где сертификата ещё нет), после выпуска включите обратно.' "${CDN_DOMAIN}")"
+    log "Выпуск сертификата: ${cert_domains[*]}"
     certbot "${certbot_args[@]}" || die "Сертификат не выпущен (см. вывод certbot выше)."
 fi
 install -d /etc/letsencrypt/renewal-hooks/deploy
@@ -87,6 +107,17 @@ export NGINX_LISTEN_H2 NGINX_H2_DIRECTIVE NGINX_ECDH_CURVES
 render "${TEMPLATES_DIR}/nginx/site-tls.conf.tpl" /etc/nginx/sites-available/vpn-site-tls.conf 0644 \
     VPN_DOMAIN SELF_SITE_PORT NGINX_LISTEN_H2 NGINX_H2_DIRECTIVE NGINX_ECDH_CURVES
 ln -sf /etc/nginx/sites-available/vpn-site-tls.conf /etc/nginx/sites-enabled/vpn-site-tls.conf
+
+# Вход через CDN: виртуальный хост CDN_DOMAIN, секретный путь -> Xray (vless-cdn).
+if [[ ${CDN_ENABLE} == yes ]]; then
+    CDN_PATH="$(python3 "${PROJECT_DIR}/scripts/xray-vpn.py" cdn-path)"
+    export CDN_PATH
+    render "${TEMPLATES_DIR}/nginx/cdn.conf.tpl" /etc/nginx/sites-available/vpn-cdn.conf 0644 \
+        VPN_DOMAIN CDN_DOMAIN CDN_PATH CDN_XRAY_PORT SELF_SITE_PORT NGINX_LISTEN_H2 NGINX_H2_DIRECTIVE NGINX_ECDH_CURVES
+    ln -sf /etc/nginx/sites-available/vpn-cdn.conf /etc/nginx/sites-enabled/vpn-cdn.conf
+else
+    rm -f /etc/nginx/sites-enabled/vpn-cdn.conf
+fi
 nginx -t 2>/dev/null || { nginx -t; die "nginx -t: ошибка конфигурации"; }
 systemctl reload nginx
 
@@ -94,3 +125,9 @@ code="$(curl -s --noproxy '*' -o /dev/null -w '%{http_code} HTTP/%{http_version}
         --resolve "${VPN_DOMAIN}:${SELF_SITE_PORT}:127.0.0.1" "https://${VPN_DOMAIN}:${SELF_SITE_PORT}/" || true)"
 [[ ${code} == "200 HTTP/2" ]] || die "Сайт-заглушка не отвечает как ожидалось: '${code}' (нужно '200 HTTP/2')."
 log "Сайт-заглушка ${VPN_DOMAIN} работает (${code}, ${NGINX_ECDH_CURVES%%:*})."
+if [[ ${CDN_ENABLE} == yes ]]; then
+    code="$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' --max-time 10 \
+            --resolve "${CDN_DOMAIN}:${SELF_SITE_PORT}:127.0.0.1" "https://${CDN_DOMAIN}:${SELF_SITE_PORT}/" || true)"
+    [[ ${code} == 200 ]] || die "Виртуальный хост ${CDN_DOMAIN} не отвечает: '${code}'."
+    log "Вход через CDN: https://${CDN_DOMAIN}${CDN_PATH} -> Xray 127.0.0.1:${CDN_XRAY_PORT}"
+fi

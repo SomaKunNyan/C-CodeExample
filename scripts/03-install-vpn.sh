@@ -147,4 +147,5 @@ if [[ -d /etc/audit/rules.d ]]; then
 fi
 
 log "VPN-сервер запущен: VLESS + REALITY (${XRAY_TRANSPORT}) на ${PUBLIC_IPV4:-${WAN_IPV4}}:${XRAY_PORT}, маскировка под ${dest_host}"
+[[ ${CDN_ENABLE} == yes ]] && log "Вход через CDN: ${CDN_DOMAIN} (Cloudflare) -> 443 -> nginx -> Xray 127.0.0.1:${CDN_XRAY_PORT}"
 log "Добавьте пользователя: sudo ./scripts/vpn-user.sh add <имя>"
