@@ -7,8 +7,11 @@
 
 ## Приложения
 
-Подходит клиент на ядре **Xray** или **sing-box** с поддержкой VLESS + REALITY + Vision,
-который отправляет **постквантовый обмен ключами X25519MLKEM768** (как современный Chrome).
+**Транспорт XHTTP** (`XRAY_TRANSPORT="xhttp"`, по умолчанию) поддерживают только клиенты на ядре
+**Xray**: v2rayNG, v2rayN, V2Box, FoXray и т.п. Клиенты на **sing-box** (Hiddify, NekoBox, Karing)
+XHTTP не поддерживают — для них сервер нужно перевести на `XRAY_TRANSPORT="vision"`.
+
+Клиент должен поддерживать VLESS + REALITY и отправлять **постквантовый обмен ключами X25519MLKEM768** (как современный Chrome).
 Сервер на Xray **v26.9.9 и новее** отклоняет клиентов без него: «Chrome» без X25519MLKEM768 —
 устаревший, легко распознаваемый отпечаток. Старые сборки клиентов (например, Hiddify 4.1.1)
 получают таймаут, а в журнале сервера — `REALITY: processed invalid connection ... authentication
@@ -52,6 +55,8 @@ failed`. Обновите приложение или используйте к�
 | `config validation failed: ... unknown field "encryption"` | приложение на sing-box и ссылка старого формата (до исправления проекта) или в него импортирован JSON из `client-config`. Удалите профиль и импортируйте свежую ссылку из `vpn-user.sh link <имя>` |
 | Таймаут; на сервере (`XRAY_LOGLEVEL=debug`) — `processed invalid connection ... authentication failed`, хотя ключи в профиле верные, а `vpn-user.sh selftest` проходит | клиент не отправляет X25519MLKEM768 (устаревшее ядро/uTLS). Обновите приложение или возьмите v2rayNG/v2rayN на свежем Xray. Временный обход — `XRAY_VERSION="v26.7.28"` на сервере (см. config.env) |
 | `REALITY: processed invalid connection` / «handshake failed» | ссылка устарела (после `reset`) — попросите новую; проверьте, что часы на устройстве точные |
+| `XTLS only supports TLS and REALITY directly` в журнале сервера | в профиле клиента остался `flow=xtls-rprx-vision`, а сервер на XHTTP — переимпортируйте ссылку |
+| Hiddify / NekoBox: «unsupported transport xhttp» или профиль не импортируется | клиент на sing-box без XHTTP — возьмите v2rayNG/v2rayN или переведите сервер на `vision` |
 | Подключается, но ничего не открывается | пользователь заблокирован администратором, или на сервере не работает DNS (`healthcheck.sh`) |
 
 ## Рекомендации пользователям

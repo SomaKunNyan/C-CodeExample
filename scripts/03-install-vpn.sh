@@ -87,7 +87,12 @@ if ! grep -q 'TLS Version:[[:space:]]*TLS 1.3' <<<"${ping_out}"; then
     die "${dest_host} не отвечает по TLS 1.3 — выберите другой сайт (см. docs/02-vpn-server.md)."
 fi
 h2="$(curl -s -o /dev/null --max-time 10 --http2 -w '%{http_version}' "https://${dest_host}/" || true)"
-[[ ${h2} == 2 ]] || warn "${dest_host} не отвечает по HTTP/2 (ответ: '${h2}'). Лучше выбрать сайт с HTTP/2."
+if [[ ${h2} != 2 ]]; then
+    # XHTTP поверх REALITY идёт по HTTP/2: сайт-маскировка обязан его поддерживать.
+    [[ ${XRAY_TRANSPORT} == xhttp ]] \
+        && die "${dest_host} не отвечает по HTTP/2 (ответ: '${h2}'), а для XHTTP это обязательно — выберите другой REALITY_DEST."
+    warn "${dest_host} не отвечает по HTTP/2 (ответ: '${h2}'). Лучше выбрать сайт с HTTP/2."
+fi
 grep -q 'Post-Quantum key exchange:[[:space:]]*true' <<<"${ping_out}" \
     || warn "${dest_host} не поддерживает X25519MLKEM768 — клиенту с fp=chrome это не мешает, но сайт с PQ правдоподобнее."
 log "  ${dest_host}: TLS 1.3, HTTP/${h2:-?}"
@@ -128,5 +133,5 @@ if [[ -d /etc/audit/rules.d ]]; then
     augenrules --load >/dev/null || warn "augenrules: правила аудита VPN не загрузились (auditctl -l)"
 fi
 
-log "VPN-сервер запущен: VLESS + REALITY на ${PUBLIC_IPV4:-${WAN_IPV4}}:${XRAY_PORT}, маскировка под ${dest_host}"
+log "VPN-сервер запущен: VLESS + REALITY (${XRAY_TRANSPORT}) на ${PUBLIC_IPV4:-${WAN_IPV4}}:${XRAY_PORT}, маскировка под ${dest_host}"
 log "Добавьте пользователя: sudo ./scripts/vpn-user.sh add <имя>"

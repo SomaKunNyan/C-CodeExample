@@ -9,7 +9,8 @@
 Параметры сервера берутся из переменных окружения (их экспортирует lib.sh
 из config.env): XRAY_PORT, REALITY_DEST, REALITY_SERVER_NAMES, VPN_DOMAIN,
 WAN_IPV4, WAN_IPV6, BLOCK_BITTORRENT, XRAY_ACCESS_LOG, XRAY_LOGLEVEL, XRAY_API_PORT,
-CLIENT_FINGERPRINT, SPLIT_EXCLUDE_FILE, CLIENT_DIRECT_RU, PUBLIC_IPV4, LINK_ADDRESS.
+CLIENT_FINGERPRINT, SPLIT_EXCLUDE_FILE, CLIENT_DIRECT_RU, PUBLIC_IPV4, LINK_ADDRESS,
+XRAY_TRANSPORT (xhttp | vision), XHTTP_PATH, XHTTP_MODE.
 
 Команды:
     server                      конфиг сервера -> stdout
@@ -22,6 +23,7 @@ CLIENT_FINGERPRINT, SPLIT_EXCLUDE_FILE, CLIENT_DIRECT_RU, PUBLIC_IPV4, LINK_ADDR
     list                        таблица: пользователи, трафик, онлайн и IP (через API Xray)
 """
 
+import hashlib
 import ipaddress
 import json
 import os
@@ -114,12 +116,40 @@ def split_list():
     return sorted(set(domains)), nets
 
 
+def transport():
+    t = env("XRAY_TRANSPORT", "xhttp")
+    if t not in ("xhttp", "vision"):
+        die(f'XRAY_TRANSPORT="{t}": допустимо "xhttp" или "vision"')
+    return t
+
+
+def flow():
+    # XTLS Vision работает только поверх «голого» TCP (RAW) с REALITY/TLS;
+    # с XHTTP сервер отвергает его ("XTLS only supports TLS and REALITY directly").
+    return "xtls-rprx-vision" if transport() == "vision" else ""
+
+
+def xhttp_path():
+    """Путь XHTTP: из XHTTP_PATH или стабильный, выведенный из ключа сервера."""
+    p = env("XHTTP_PATH", "")
+    if not p:
+        p = "/" + hashlib.sha256((keys()["publicKey"] + "/xhttp").encode()).hexdigest()[:16]
+    return p if p.startswith("/") else "/" + p
+
+
+def stream_base():
+    """Транспортная часть streamSettings (без security), общая для сервера и клиента."""
+    if transport() == "xhttp":
+        return {"network": "xhttp", "xhttpSettings": {"path": xhttp_path(), "mode": "auto"}}
+    return {"network": "raw"}
+
+
 # --------------------------------------------------------------------------- #
 def build_server():
     k = keys()
     port = int(env("XRAY_PORT", "443"))
     clients = [
-        {"id": u["id"], "email": u["name"], "flow": "xtls-rprx-vision"}
+        {"id": u["id"], "email": u["name"], "flow": flow()}
         for u in users() if u.get("enabled", True)
     ]
 
@@ -172,7 +202,7 @@ def build_server():
                 "protocol": "vless",
                 "settings": {"clients": clients, "decryption": "none"},
                 "streamSettings": {
-                    "network": "raw",
+                    **stream_base(),
                     "security": "reality",
                     "realitySettings": {
                         # Подробности проверки REALITY (SNI, shortId, ключ) — в журнал;
@@ -234,17 +264,28 @@ def build_link(u):
     # "encryption" и "headerType" не указываем: по стандарту ссылок VLESS
     # по умолчанию это "none", а клиенты на sing-box (Hiddify, NekoBox, Karing)
     # переносят "encryption" в свой конфиг и падают с "unknown field".
-    q = urllib.parse.urlencode({
-        "flow": "xtls-rprx-vision",
+    params = {
         "security": "reality",
         "sni": p["sni"],
         "fp": p["fp"],
         "pbk": p["pbk"],
         "sid": p["sid"],
-        "type": "tcp",
-    })
+    }
+    if transport() == "xhttp":
+        # Режим выбирает клиент; сервер ("auto") принимает любой.
+        params.update({"type": "xhttp", "path": xhttp_path(), "mode": env("XHTTP_MODE", "auto")})
+    else:
+        params.update({"type": "tcp", "flow": flow()})
+    q = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
     tag = urllib.parse.quote(f"{u['name']}@{p['host']}")
     return f"vless://{p['id']}@{host}:{p['port']}?{q}#{tag}"
+
+
+def client_stream_base():
+    s = stream_base()
+    if transport() == "xhttp":
+        s["xhttpSettings"]["mode"] = env("XHTTP_MODE", "auto")
+    return s
 
 
 def build_client(u):
@@ -276,10 +317,10 @@ def build_client(u):
                 "protocol": "vless",
                 "settings": {"vnext": [{
                     "address": p["host"], "port": p["port"],
-                    "users": [{"id": p["id"], "encryption": "none", "flow": "xtls-rprx-vision"}],
+                    "users": [{"id": p["id"], "encryption": "none", "flow": flow()}],
                 }]},
                 "streamSettings": {
-                    "network": "raw",
+                    **client_stream_base(),
                     "security": "reality",
                     "realitySettings": {
                         "serverName": p["sni"], "fingerprint": p["fp"],

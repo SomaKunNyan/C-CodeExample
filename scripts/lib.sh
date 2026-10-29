@@ -49,6 +49,9 @@ load_config() {
     : "${REALITY_DEST:=}" "${REALITY_SERVER_NAMES:=}" "${CLIENT_FINGERPRINT:=chrome}"
     : "${BLOCK_BITTORRENT:=yes}" "${XRAY_ACCESS_LOG:=no}" "${CLIENT_DIRECT_RU:=no}"
     : "${XRAY_LOGLEVEL:=warning}" "${PUBLIC_IPV4:=}" "${LINK_ADDRESS:=ip}"
+    : "${XRAY_TRANSPORT:=xhttp}" "${XHTTP_MODE:=auto}" "${XHTTP_PATH:=}"
+    case "${XRAY_TRANSPORT}" in xhttp|vision) ;; *) die "XRAY_TRANSPORT=${XRAY_TRANSPORT}: допустимо xhttp или vision." ;; esac
+    case "${XHTTP_MODE}" in auto|packet-up|stream-up|stream-one) ;; *) die "XHTTP_MODE=${XHTTP_MODE}: допустимо auto, packet-up, stream-up, stream-one." ;; esac
     : "${SPLIT_EXCLUDE_FILE:=${PROJECT_DIR}/split-exclude.txt}"
 
     ip link show dev "${WAN_IF}" >/dev/null 2>&1 \
@@ -82,7 +85,8 @@ load_config() {
     fi
     export VPN_DOMAIN WAN_IF WAN_IPV4 WAN_IPV6 ADMIN_USER SSH_PORT XRAY_VERSION XRAY_PORT \
            XRAY_API_PORT REALITY_DEST REALITY_SERVER_NAMES CLIENT_FINGERPRINT BLOCK_BITTORRENT \
-           XRAY_ACCESS_LOG XRAY_LOGLEVEL CLIENT_DIRECT_RU SPLIT_EXCLUDE_FILE PUBLIC_IPV4 LINK_ADDRESS
+           XRAY_ACCESS_LOG XRAY_LOGLEVEL CLIENT_DIRECT_RU SPLIT_EXCLUDE_FILE PUBLIC_IPV4 LINK_ADDRESS \
+           XRAY_TRANSPORT XHTTP_MODE XHTTP_PATH
 }
 
 # Резервная копия файла перед перезаписью.

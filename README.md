@@ -1,12 +1,12 @@
 # vpn-https-debian
 
-VPN-сервер на **Xray: VLESS + REALITY + XTLS Vision** поверх TCP/443 для **Debian 12/13**,
+VPN-сервер на **Xray: VLESS + REALITY** (транспорт **XHTTP** или **XTLS Vision**) на TCP/443 для **Debian 12/13**,
 с первоначальной настройкой безопасности ОС и тюнингом под сеть до **40 Гбит/с**.
 Проект содержит скрипты автоматической установки, шаблоны конфигураций и пошаговую документацию.
 
 | Что | Чем |
 |---|---|
-| VPN-протокол | **VLESS** + поток **XTLS Vision**, сервер [Xray-core](https://github.com/XTLS/Xray-core) |
+| VPN-протокол | **VLESS**, сервер [Xray-core](https://github.com/XTLS/Xray-core); транспорт **XHTTP** (HTTP/2-запросы, по умолчанию) или **XTLS Vision** (`XRAY_TRANSPORT`) |
 | Транспорт | **REALITY**: TLS 1.3 на TCP/443 с SNI и сертификатом настоящего постороннего сайта, отпечаток Chrome |
 | Шифрование | TLS 1.3 (x25519 / X25519MLKEM768, AES-GCM / ChaCha20-Poly1305), PFS |
 | Скрытность | без ключа клиента сервер неотличим от сайта-маскировки — и для сканеров, и для активных проверок DPI |
