@@ -47,7 +47,8 @@ load_config() {
     : "${ADMIN_SSH_PUBKEY:=}" "${SSH_ALLOW_FROM:=}" "${VPN_DOMAIN:=}" "${WAN_IPV4:=}" "${WAN_IPV6:=}"
     : "${XRAY_VERSION:=latest}" "${XRAY_PORT:=443}" "${XRAY_API_PORT:=10085}"
     : "${REALITY_DEST:=}" "${REALITY_SERVER_NAMES:=}" "${CLIENT_FINGERPRINT:=chrome}"
-    : "${BLOCK_BITTORRENT:=yes}" "${XRAY_ACCESS_LOG:=no}" "${CLIENT_DIRECT_RU:=no}"
+    : "${BLOCK_BITTORRENT:=yes}" "${XRAY_ACCESS_LOG:=no}" "${CLIENT_DIRECT_RU:=yes}"
+    : "${SERVER_BLOCK_RU:=yes}" "${REALITY_MIRROR_PORTS:=no}"
     : "${XRAY_LOGLEVEL:=warning}" "${PUBLIC_IPV4:=}" "${LINK_ADDRESS:=ip}"
     : "${XRAY_TRANSPORT:=xhttp}" "${XHTTP_MODE:=auto}" "${XHTTP_PATH:=}"
     : "${REALITY_SELF_SITE:=no}" "${ACME_EMAIL:=}" "${SELF_SITE_PORT:=8443}" "${SITE_TITLE:=}"
@@ -55,6 +56,9 @@ load_config() {
     if [[ ${CDN_ENABLE} == yes ]]; then
         [[ ${REALITY_SELF_SITE} == yes ]] || die "CDN_ENABLE=\"yes\" работает только вместе с REALITY_SELF_SITE=\"yes\" (nginx и сертификат берутся оттуда)."
         [[ -n ${CDN_DOMAIN} ]] || die "CDN_ENABLE=\"yes\": задайте CDN_DOMAIN (например, cdn.${VPN_DOMAIN:-ваш-домен})."
+    fi
+    if [[ ${REALITY_MIRROR_PORTS} == yes && ${REALITY_SELF_SITE} == yes ]]; then
+        die "REALITY_MIRROR_PORTS=\"yes\" — только для маскировки под чужой сайт; при REALITY_SELF_SITE=\"yes\" порт 80 обслуживает свой nginx."
     fi
     case "${XRAY_TRANSPORT}" in xhttp|vision) ;; *) die "XRAY_TRANSPORT=${XRAY_TRANSPORT}: допустимо xhttp или vision." ;; esac
     case "${XHTTP_MODE}" in auto|packet-up|stream-up|stream-one) ;; *) die "XHTTP_MODE=${XHTTP_MODE}: допустимо auto, packet-up, stream-up, stream-one." ;; esac
@@ -93,7 +97,7 @@ load_config() {
            XRAY_API_PORT REALITY_DEST REALITY_SERVER_NAMES CLIENT_FINGERPRINT BLOCK_BITTORRENT \
            XRAY_ACCESS_LOG XRAY_LOGLEVEL CLIENT_DIRECT_RU SPLIT_EXCLUDE_FILE PUBLIC_IPV4 LINK_ADDRESS \
            XRAY_TRANSPORT XHTTP_MODE XHTTP_PATH REALITY_SELF_SITE ACME_EMAIL SELF_SITE_PORT SITE_TITLE \
-           CDN_ENABLE CDN_DOMAIN CDN_XRAY_PORT CDN_PATH
+           CDN_ENABLE CDN_DOMAIN CDN_XRAY_PORT CDN_PATH SERVER_BLOCK_RU REALITY_MIRROR_PORTS
 }
 
 # Резервная копия файла перед перезаписью.

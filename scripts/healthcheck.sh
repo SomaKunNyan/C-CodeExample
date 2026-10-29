@@ -51,6 +51,15 @@ if [[ -n ${REALITY_DEST} || ${REALITY_SELF_SITE} == yes ]]; then
     else
         chk "сайт-маскировка ${dest_host} доступен с сервера" \
             timeout 10 curl -s -o /dev/null --http2 "https://${dest_host}/"
+        if [[ ${REALITY_MIRROR_PORTS} == yes ]]; then
+            # IP сайта вписан в правила при запуске 02-firewall.sh — сверяем с текущим.
+            mirror_host="${REALITY_DEST%:*}"
+            cur_ip="$(getent ahostsv4 "${mirror_host}" | awk '{print $1}' | sort -u)"
+            nft_ip="$(nft list table ip vpn_mirror 2>/dev/null | grep -oE 'dnat to [0-9.]+' | head -n1 | awk '{print $3}')"
+            if [[ -z ${nft_ip} ]]; then bad "зеркало портов не загружено (запустите 02-firewall.sh)"
+            elif grep -qx "${nft_ip}" <<<"${cur_ip}"; then ok "зеркало TCP/80, UDP/${XRAY_PORT} -> ${mirror_host} (${nft_ip})"
+            else bad "IP ${mirror_host} сменился (${nft_ip} -> $(xargs <<<"${cur_ip}")): перезапустите 02-firewall.sh"; fi
+        fi
     fi
 fi
 
@@ -65,7 +74,11 @@ fi
 echo "== Сеть"
 chk "BBR"                         bash -c "[[ \$(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]"
 chk "политика input = drop"       bash -c "nft list chain inet filter input | grep -q 'policy drop'"
-chk "маршрутизация выключена"     bash -c "[[ \$(sysctl -n net.ipv4.ip_forward) == 0 ]]"
+if [[ ${REALITY_MIRROR_PORTS} == yes ]]; then
+    chk "forward: политика drop"  bash -c "nft list chain inet filter forward | grep -q 'policy drop'"
+else
+    chk "маршрутизация выключена" bash -c "[[ \$(sysctl -n net.ipv4.ip_forward) == 0 ]]"
+fi
 ct=$(sysctl -n net.netfilter.nf_conntrack_count 2>/dev/null || echo 0)
 ctmax=$(sysctl -n net.netfilter.nf_conntrack_max 2>/dev/null || echo 1)
 if (( ct * 100 / ctmax < 80 )); then ok "conntrack: ${ct}/${ctmax}"; else bad "conntrack заполнен: ${ct}/${ctmax}"; fi

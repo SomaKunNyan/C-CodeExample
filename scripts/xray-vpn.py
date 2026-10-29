@@ -9,7 +9,7 @@
 Параметры сервера берутся из переменных окружения (их экспортирует lib.sh
 из config.env): XRAY_PORT, REALITY_DEST, REALITY_SERVER_NAMES, VPN_DOMAIN,
 WAN_IPV4, WAN_IPV6, BLOCK_BITTORRENT, XRAY_ACCESS_LOG, XRAY_LOGLEVEL, XRAY_API_PORT,
-CLIENT_FINGERPRINT, SPLIT_EXCLUDE_FILE, CLIENT_DIRECT_RU, PUBLIC_IPV4, LINK_ADDRESS,
+CLIENT_FINGERPRINT, SPLIT_EXCLUDE_FILE, CLIENT_DIRECT_RU, SERVER_BLOCK_RU, PUBLIC_IPV4, LINK_ADDRESS,
 XRAY_TRANSPORT (xhttp | vision), XHTTP_PATH, XHTTP_MODE,
 CDN_ENABLE, CDN_DOMAIN, CDN_XRAY_PORT, CDN_PATH.
 
@@ -39,6 +39,8 @@ STORE = os.environ.get("XRAY_STORE", "/etc/xray")
 KEYS = os.path.join(STORE, "keys.json")
 USERS = os.path.join(STORE, "users.json")
 NAME_RE = re.compile(r"^[a-z][a-z0-9._-]{1,31}$")
+# Российские сайты: база geosite и зоны .ru, .su, .рф (xn--p1ai).
+RU_DOMAINS = ["geosite:category-ru", "domain:ru", "domain:su", "domain:xn--p1ai"]
 
 
 def die(msg):
@@ -178,6 +180,13 @@ def build_server():
     rules = []
     if env("BLOCK_BITTORRENT", "yes") == "yes":
         rules.append({"protocol": ["bittorrent"], "outboundTag": "block"})
+    if env("SERVER_BLOCK_RU", "yes") == "yes":
+        # Российские сайты клиент должен открывать напрямую (CLIENT_DIRECT_RU / регион
+        # «Россия» в приложении). Трафик РФ -> VPS -> рунет дважды пересекает границу
+        # и выдаёт прокси, поэтому сервер его не пропускает: ошибка в настройках
+        # клиента проявится сразу, а не «засветит» сервер.
+        rules.append({"domain": RU_DOMAINS, "outboundTag": "block"})
+        rules.append({"ip": ["geoip:ru"], "outboundTag": "block"})
 
     target_strategy = "UseIP" if env("WAN_IPV6", "") else "UseIPv4"
 
@@ -366,9 +375,8 @@ def build_client(u, variant=""):
         rules.append({"domain": [f"domain:{d}" for d in domains], "outboundTag": "direct"})
     if nets:
         rules.append({"ip": nets, "outboundTag": "direct"})
-    if env("CLIENT_DIRECT_RU", "no") == "yes":
-        rules.append({"domain": ["geosite:category-ru", "domain:ru", "domain:xn--p1ai"],
-                      "outboundTag": "direct"})
+    if env("CLIENT_DIRECT_RU", "yes") == "yes":
+        rules.append({"domain": RU_DOMAINS, "outboundTag": "direct"})
         rules.append({"ip": ["geoip:ru"], "outboundTag": "direct"})
 
     return {

@@ -5,7 +5,9 @@
 #  Политика: всё входящее и транзитное ЗАПРЕЩЕНО, кроме явно разрешённого.
 #
 #  Xray — прокси: трафик клиентов он сам открывает к сайтам с адреса сервера,
-#  поэтому маршрутизация (forward) и NAT не нужны и полностью запрещены.
+#  поэтому маршрутизация (forward) и NAT для клиентов не нужны и запрещены.
+#  Исключение — REALITY_MIRROR_PORTS="yes": входящие TCP/80 и UDP/443
+#  пересылаются на настоящий сайт маскировки (таблица ip vpn_mirror ниже).
 # =============================================================================
 
 flush ruleset
@@ -21,6 +23,12 @@ table inet filter {
     }
     set ssh_meter6 {
         type ipv6_addr
+        size 65535
+        flags dynamic, timeout
+        timeout 1m
+    }
+    set mirror_meter4 {
+        type ipv4_addr
         size 65535
         flags dynamic, timeout
         timeout 1m
@@ -53,9 +61,11 @@ ${NFT_SSH_RULES}
 
     chain forward {
         type filter hook forward priority filter; policy drop;
+${NFT_FORWARD_RULES}
     }
 
     chain output {
         type filter hook output priority filter; policy accept;
     }
 }
+${NFT_MIRROR_TABLE}

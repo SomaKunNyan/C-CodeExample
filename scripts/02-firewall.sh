@@ -38,12 +38,46 @@ NFT_HTTP_RULES=""
 if [[ ${REALITY_SELF_SITE} == yes ]]; then
     NFT_HTTP_RULES="        tcp dport 80 accept"
 fi
-export NFT_SSH_RULES NFT_HTTP_RULES
+# --- Зеркало портов сайта маскировки (REALITY_MIRROR_PORTS) ----------------------
+# У настоящего сайта открыты TCP/80 (редирект на HTTPS) и UDP/443 (HTTP/3), а у
+# сервера, который под него маскируется, без этого они закрыты — заметное
+# отличие для сканера. Пересылаем эти порты на сам сайт: снаружи сервер
+# отвечает на них так же, как оригинал.
+NFT_FORWARD_RULES="" NFT_MIRROR_TABLE="" MIRROR_IP=""
+if [[ ${REALITY_MIRROR_PORTS} == yes ]]; then
+    require_reality
+    mirror_host="${REALITY_DEST%:*}" mirror_port="${REALITY_DEST##*:}"
+    if [[ ${mirror_host} =~ ^[0-9.]+$ ]]; then
+        MIRROR_IP="${mirror_host}"
+    else
+        MIRROR_IP="$(getent ahostsv4 "${mirror_host}" | awk '{print $1; exit}')"
+    fi
+    is_global_ip "${MIRROR_IP}" \
+        || die "REALITY_MIRROR_PORTS: не удалось получить публичный IPv4 ${mirror_host} (получено: '${MIRROR_IP}')."
+    log "Зеркало портов: TCP/80 и UDP/${XRAY_PORT} -> ${mirror_host} (${MIRROR_IP})"
+    NFT_FORWARD_RULES="        # Только соединения, перенаправленные таблицей vpn_mirror; новые — с лимитом на адрес.
+        iifname \"${WAN_IF}\" oifname \"${WAN_IF}\" ct status dnat ct state established,related accept
+        iifname \"${WAN_IF}\" oifname \"${WAN_IF}\" ct status dnat ct state new add @mirror_meter4 { ip saddr limit rate 30/second burst 60 packets } accept"
+    NFT_MIRROR_TABLE="# Зеркало портов сайта маскировки ${mirror_host} (REALITY_MIRROR_PORTS=\"yes\").
+# IP сайта зафиксирован при генерации: если он сменится — перезапустите 02-firewall.sh.
+table ip vpn_mirror {
+    chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+        iifname \"${WAN_IF}\" tcp dport 80 dnat to ${MIRROR_IP}:80
+        iifname \"${WAN_IF}\" udp dport ${XRAY_PORT} dnat to ${MIRROR_IP}:${mirror_port}
+    }
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname \"${WAN_IF}\" ct status dnat masquerade
+    }
+}"
+fi
+export NFT_SSH_RULES NFT_HTTP_RULES NFT_FORWARD_RULES NFT_MIRROR_TABLE
 
 # --- Генерация и проверка --------------------------------------------------------
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
-envsubst '${XRAY_PORT} ${NFT_SSH_RULES} ${NFT_HTTP_RULES}' \
+envsubst '${XRAY_PORT} ${NFT_SSH_RULES} ${NFT_HTTP_RULES} ${NFT_FORWARD_RULES} ${NFT_MIRROR_TABLE}' \
     < "${TEMPLATES_DIR}/nftables/nftables.conf.tpl" > "$tmp"
 nft -c -f "$tmp" || die "Синтаксическая ошибка в сгенерированных правилах ($tmp)."
 
@@ -75,10 +109,13 @@ install -m 0600 "$tmp" /etc/nftables.conf
 systemctl enable nftables
 systemctl restart nftables
 
-# Маршрутизация не нужна (Xray — прокси): выключаем её явно.
-rm -f /etc/sysctl.d/91-vpn-forward.conf
-printf 'net.ipv4.ip_forward = 0\nnet.ipv6.conf.all.forwarding = 0\n' > /etc/sysctl.d/91-no-forward.conf
-sysctl -p /etc/sysctl.d/91-no-forward.conf >/dev/null
+# Маршрутизация клиентам не нужна (Xray — прокси). IPv4 forwarding включается только
+# для зеркала портов; что именно пересылать, ограничивает цепочка forward (policy drop).
+rm -f /etc/sysctl.d/91-vpn-forward.conf /etc/sysctl.d/91-no-forward.conf
+fwd=0
+[[ ${REALITY_MIRROR_PORTS} == yes ]] && fwd=1
+printf 'net.ipv4.ip_forward = %s\nnet.ipv6.conf.all.forwarding = 0\n' "${fwd}" > /etc/sysctl.d/91-forward.conf
+sysctl -p /etc/sysctl.d/91-forward.conf >/dev/null
 
 # fail2ban создаёт свои таблицы в nftables — после flush ruleset перезапускаем.
 systemctl is-active --quiet fail2ban && systemctl restart fail2ban

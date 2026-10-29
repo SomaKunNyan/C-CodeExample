@@ -13,9 +13,10 @@ VPN-сервер на **Xray: VLESS + REALITY** (транспорт **XHTTP** и
 | Сертификат / домен | не нужны (домен — по желанию, для удобной смены IP) |
 | Пользователи | UUID на пользователя, ссылки `vless://` и QR-коды, блокировка/перевыпуск, трафик и онлайн по каждому |
 | Запасной вход | через **CDN (Cloudflare)**, если IP сервера режется провайдером: `CDN_ENABLE`, вторая ссылка |
+| Маскировка снаружи | подбор сайта `find-dest.sh` (RealiTLScanner + проверки); зеркало TCP/80 и UDP/443 сайта (`REALITY_MIRROR_PORTS`) |
 | Исключения | сайты мимо VPN — по доменам, на стороне клиента (`split-exclude.txt`, «регион Россия» в Hiddify) |
 | Hardening ОС | SSH только по ключам, nftables default-deny, fail2ban, auditd, AppArmor, sysctl, автообновления |
-| Изоляция | Xray без root, песочница systemd; клиентам закрыт доступ к сети ДЦ и к самому серверу; SMTP/BitTorrent заблокированы |
+| Изоляция | Xray без root, песочница systemd; клиентам закрыт доступ к сети ДЦ и к самому серверу; SMTP/BitTorrent и рунет через VPN заблокированы |
 | 40G | BBR + fq, буферы, conntrack, RSS-очереди NIC, ring buffers; Vision + splice — мало CPU на гигабит |
 
 ## Архитектура
@@ -85,6 +86,7 @@ sudo apt purge ocserv certbot         # по желанию, после пров
 │   ├── 01-harden-system.sh        # hardening Debian
 │   ├── 02-firewall.sh             # nftables, применение с откатом
 │   ├── 03-install-vpn.sh          # Xray (проверка SHA-256), ключи REALITY, unbound
+│   ├── find-dest.sh               # подбор сайта для маскировки (REALITY_DEST)
 │   ├── self-site.sh               # свой сайт-заглушка для REALITY: nginx + Let's Encrypt
 │   ├── 04-tune-performance.sh     # sysctl, NIC, CPU
 │   ├── vpn-user.sh                # пользователи: ссылки, QR, блокировка, статистика
