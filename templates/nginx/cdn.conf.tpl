@@ -34,6 +34,13 @@ ${NGINX_H2_DIRECTIVE}
         proxy_send_timeout 300s;
     }
 
+    # Продление Let's Encrypt при включённом в Cloudflare «Always Use HTTPS»: проверка
+    # по http:// получает редирект на https:// и приходит сюда через CDN.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/acme;
+        default_type text/plain;
+    }
+
     location / {
         try_files $uri $uri/ =404;
     }

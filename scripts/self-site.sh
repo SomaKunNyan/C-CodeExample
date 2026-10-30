@@ -80,7 +80,7 @@ if [[ ${need_cert} == yes ]]; then
     for d in "${cert_domains[@]}"; do certbot_args+=(-d "$d"); done
     log "Пробный выпуск сертификата (Let's Encrypt staging — не расходует лимиты): ${cert_domains[*]}"
     certbot "${certbot_args[@]}" --dry-run || die "Проверка домена не прошла: A-запись ${VPN_DOMAIN} и доступность порта 80 снаружи (firewall хостера).$(
-        [[ ${CDN_ENABLE} == yes ]] && printf '\n  Для %s: в Cloudflare временно выключите SSL/TLS -> Edge Certificates -> «Always Use HTTPS»\n  (иначе проверка уходит на HTTPS, где сертификата ещё нет), после выпуска включите обратно.' "${CDN_DOMAIN}")"
+        [[ ${CDN_ENABLE} == yes ]] && printf '\n  Для %s: в Cloudflare временно выключите SSL/TLS -> Edge Certificates -> «Always Use HTTPS»\n  (иначе проверка уходит на HTTPS, где сертификата ещё нет), после выпуска можно включить обратно.' "${CDN_DOMAIN}")"
     log "Выпуск сертификата: ${cert_domains[*]}"
     certbot "${certbot_args[@]}" || die "Сертификат не выпущен (см. вывод certbot выше)."
 fi
