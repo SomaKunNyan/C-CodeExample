@@ -22,9 +22,12 @@ require_reality
 
 usage() { sed -n '3,14p' "$0" | sed 's/^#  \{0,1\}//'; exit 1; }
 
+NGINX_ACCESS_LOG=/var/log/nginx/access.log
+
 # Подсказка по журналу клиента для типичных ошибок настройки CDN.
+# cdn_hint <журнал клиента> <первая строка access.log nginx, записанная во время теста>
 cdn_hint() {
-    local logf=$1 code
+    local logf=$1 from=${2:-1} code path hits
     code="$(grep -oE '(unexpected status|bad status code:|response code:) *[0-9]{3}' "$logf" | grep -oE '[0-9]{3}$' | tail -n1 || true)"
     if grep -q 'redirects' "$logf"; then
         warn "Подсказка: CDN обращается к серверу по HTTP (порт 80), а nginx отвечает редиректом на"
@@ -40,6 +43,19 @@ cdn_hint() {
         warn "  на сервере: ss -tlnp | grep ${CDN_XRAY_PORT}; ресурс CDN может ещё активироваться."
     elif [[ $code =~ ^4 ]]; then
         warn "Подсказка: ${code} — CDN отклоняет запрос: проверьте, что разрешены методы GET и POST и выключены WAF/лимиты."
+    fi
+    # Кто ответил ошибкой: если запросов с секретным путём нет в журнале nginx, до сервера
+    # они не дошли — ответ даёт сам CDN.
+    [[ -n $code && -r ${NGINX_ACCESS_LOG} ]] || return 0
+    path="$(xray_py cdn-path)"
+    hits="$(tail -n +"${from}" "${NGINX_ACCESS_LOG}" | grep -F " ${path}" || true)"
+    if [[ -z $hits ]]; then
+        warn "  Запросы к ${path} до сервера НЕ дошли (их нет в ${NGINX_ACCESS_LOG}): ответ ${code} даёт сам CDN."
+        warn "  В CDN-ресурсе: разрешённые методы (GET, POST), WAF/защита, ограничения по странам/IP/Referer/User-Agent,"
+        warn "  тип контента (динамический, не «только статика»); затем очистите кэш ресурса (Purge all)."
+    else
+        warn "  Запросы дошли до сервера, ответы nginx (последние):"
+        tail -n 5 <<<"$hits" >&2
     fi
 }
 
@@ -119,6 +135,7 @@ case "$cmd" in
             .inbounds = [{\"tag\":\"socks\",\"listen\":\"127.0.0.1\",\"port\":10899,\"protocol\":\"socks\"}]
             | .routing.rules = []
             | .log.loglevel = \"debug\"" > "${work}/client.json"
+        ngx_from=$(( $(wc -l < "${NGINX_ACCESS_LOG}" 2>/dev/null || echo 0) + 1 ))
         "${XRAY_BIN}" run -config "${work}/client.json" > "${work}/client.log" 2>&1 &
         pid=$!
         sleep 2
@@ -128,7 +145,7 @@ case "$cmd" in
         else
             warn "Самопроверка НЕ пройдена. Журнал клиента:"
             grep -Ei 'reality|error|fail|warn|xhttp|tls' "${work}/client.log" | tail -n 20
-            [[ $variant == cdn ]] && cdn_hint "${work}/client.log"
+            [[ $variant == cdn ]] && cdn_hint "${work}/client.log" "${ngx_from}"
             warn "Журнал сервера: journalctl -u xray -n 50 --no-pager"
             exit 1
         fi
