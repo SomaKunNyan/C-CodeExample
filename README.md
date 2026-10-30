@@ -16,7 +16,7 @@ VPN-сервер на **Xray: VLESS + REALITY** (транспорт **XHTTP** и
 | Маскировка снаружи | подбор сайта `find-dest.sh` (RealiTLScanner + проверки); зеркало TCP/80 и UDP/443 сайта (`REALITY_MIRROR_PORTS`) |
 | Исключения | сайты мимо VPN — по доменам, на стороне клиента (`split-exclude.txt`, «регион Россия» в Hiddify) |
 | Hardening ОС | SSH только по ключам, nftables default-deny, fail2ban, auditd, AppArmor, sysctl, автообновления |
-| Изоляция | Xray без root, песочница systemd; клиентам закрыт доступ к сети ДЦ и к самому серверу; SMTP/BitTorrent и рунет через VPN заблокированы |
+| Изоляция | Xray без root, песочница systemd; клиентам закрыт доступ к сети ДЦ и к самому серверу; SMTP/BitTorrent заблокированы |
 | 40G | BBR + fq, буферы, conntrack, RSS-очереди NIC, ring buffers; Vision + splice — мало CPU на гигабит |
 
 ## Архитектура
