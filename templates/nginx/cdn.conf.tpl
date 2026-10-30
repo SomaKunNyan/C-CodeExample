@@ -1,5 +1,5 @@
 # /etc/nginx/sites-available/vpn-cdn.conf — сгенерировано scripts/self-site.sh (CDN_ENABLE=yes)
-# Cloudflare подключается к серверу на 443 с SNI = CDN-домен. REALITY не узнаёт это имя
+# CDN (Gcore, Cloudflare...) подключается к серверу на 443 с SNI = CDN-домен. REALITY не узнаёт это имя
 # и прозрачно передаёт соединение сюда (на сайт-заглушку). Секретный путь XHTTP уходит
 # во вход Xray "vless-cdn", остальное — обычный сайт.
 server {
@@ -26,7 +26,7 @@ ${NGINX_H2_DIRECTIVE}
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header Connection "";
-        proxy_set_header X-Forwarded-For $http_cf_connecting_ip;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_buffering off;
         proxy_request_buffering off;
         client_max_body_size 0;
@@ -34,8 +34,8 @@ ${NGINX_H2_DIRECTIVE}
         proxy_send_timeout 300s;
     }
 
-    # Продление Let's Encrypt при включённом в Cloudflare «Always Use HTTPS»: проверка
-    # по http:// получает редирект на https:// и приходит сюда через CDN.
+    # Проверка Let's Encrypt, если CDN перенаправляет http:// на https:// (Cloudflare
+    # «Always Use HTTPS», редирект на HTTPS в Gcore): она приходит сюда через CDN.
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/acme;
         default_type text/plain;

@@ -261,7 +261,7 @@ def build_server():
 
 
 def cdn_inbound(clients):
-    """Вход для трафика через CDN: Cloudflare -> 443 (REALITY не узнаёт SNI CDN-домена
+    """Вход для трафика через CDN (Gcore, Cloudflare...) -> 443 (REALITY не узнаёт SNI CDN-домена
     и передаёт соединение сайту-заглушке) -> nginx (TLS, CDN_DOMAIN) -> этот вход.
     Без TLS и только на 127.0.0.1: шифрование до сервера обеспечивают CDN и nginx."""
     return {
@@ -309,7 +309,7 @@ def client_params(u):
 def build_link(u, variant=""):
     if variant == "cdn":
         p = cdn_params(u)
-        # Через CDN: обычный TLS к узлу Cloudflare (SNI = CDN-домен), XHTTP packet-up —
+        # Через CDN: обычный TLS к узлу CDN (SNI = CDN-домен), XHTTP packet-up —
         # CDN пересылает отдельные HTTP-запросы и не любит длинные потоковые загрузки.
         q = urllib.parse.urlencode({
             "security": "tls", "sni": p["sni"], "fp": p["fp"], "alpn": "h2,http/1.1",

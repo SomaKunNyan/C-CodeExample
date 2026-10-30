@@ -66,7 +66,7 @@ fi
 if [[ ${CDN_ENABLE} == yes ]]; then
     echo "== CDN (${CDN_DOMAIN})"
     chk "вход Xray для CDN слушает 127.0.0.1:${CDN_XRAY_PORT}" bash -c "ss -Htln 'sport = :${CDN_XRAY_PORT}' | grep -q '127.0.0.1:'"
-    # Полный путь: интернет -> Cloudflare -> 443 -> REALITY (чужой SNI) -> nginx.
+    # Полный путь: интернет -> CDN -> 443 -> REALITY (чужой SNI) -> nginx.
     chk "https://${CDN_DOMAIN}/ открывается через CDN" \
         bash -c "[[ \$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 'https://${CDN_DOMAIN}/') == 200 ]]"
 fi

@@ -27,11 +27,13 @@ if [[ -n ${PUBLIC_IPV4} && ${resolved} != "${PUBLIC_IPV4}" ]]; then
     die "${VPN_DOMAIN} указывает на '${resolved:-ничего}', а публичный IP сервера ${PUBLIC_IPV4}. Исправьте A-запись — без неё не будет сертификата."
 fi
 if [[ ${CDN_ENABLE} == yes ]]; then
-    # CDN-домен должен быть «оранжевым» (Proxied) в Cloudflare: указывать на адреса CDN, не на сервер.
+    # CDN-домен должен указывать на адреса CDN, а не на сервер: CNAME на адрес ресурса
+    # (Gcore: cl-xxxx.gcdn.co) или A-запись с оранжевым облаком (Cloudflare).
     cdn_ip="$(dig +short A "${CDN_DOMAIN}" @1.1.1.1 | grep -E '^[0-9.]+$' | head -n1 || true)"
-    [[ -n ${cdn_ip} ]] || die "${CDN_DOMAIN} не разрешается. Создайте в Cloudflare запись A ${CDN_DOMAIN%%.*} -> ${PUBLIC_IPV4:-IP сервера} (Proxied)."
+    [[ -n ${cdn_ip} ]] || die "${CDN_DOMAIN} не разрешается. Gcore: CNAME ${CDN_DOMAIN%%.*} -> адрес CDN-ресурса (cl-....gcdn.co); Cloudflare: A ${CDN_DOMAIN%%.*} -> ${PUBLIC_IPV4:-IP сервера}, оранжевое облако. См. docs/07-cdn.md."
     [[ ${cdn_ip} != "${PUBLIC_IPV4}" ]] \
-        || die "${CDN_DOMAIN} указывает прямо на сервер (${cdn_ip}): в Cloudflare включите проксирование (оранжевое облако)."
+        || die "${CDN_DOMAIN} указывает прямо на сервер (${cdn_ip}), а не на CDN: Gcore — запись должна быть CNAME на адрес ресурса; Cloudflare — включите оранжевое облако."
+    log "${CDN_DOMAIN} -> ${cdn_ip} ($(dig +short CNAME "${CDN_DOMAIN}" @1.1.1.1 | head -n1 || true))"
 fi
 if systemctl is-active --quiet nftables && ! nft list chain inet filter input 2>/dev/null | grep -q 'tcp dport 80 accept'; then
     die "Порт 80 закрыт в nftables. Сначала: sudo ./scripts/02-firewall.sh (при REALITY_SELF_SITE=\"yes\" он откроет 80)."
@@ -62,27 +64,37 @@ systemctl enable nginx
 systemctl reload-or-restart nginx
 
 # --- 4. Сертификат Let's Encrypt ----------------------------------------------
-# Один сертификат на основной домен и (если включён CDN) на CDN-домен.
-cert_domains=("${VPN_DOMAIN}")
-[[ ${CDN_ENABLE} == yes ]] && cert_domains+=("${CDN_DOMAIN}")
+# Один сертификат на основной домен и (если включён CDN) на CDN-домен. CDN-домен в
+# сертификате сервера нужен Cloudflare в режиме Full (strict). Проверка Let's Encrypt
+# для CDN-домена идёт через CDN, и некоторые CDN (Gcore выпускает свой сертификат тем
+# же способом) её не пропускают — тогда сертификат выпускается только на основной домен.
 cert_file="/etc/letsencrypt/live/${VPN_DOMAIN}/fullchain.pem"
-need_cert=no
-if [[ ! -f ${cert_file} ]]; then
-    need_cert=yes
-else
-    sans="$(openssl x509 -noout -ext subjectAltName -in "${cert_file}" 2>/dev/null || true)"
-    for d in "${cert_domains[@]}"; do grep -q "DNS:${d}\b" <<<"${sans}" || need_cert=yes; done
-fi
-if [[ ${need_cert} == yes ]]; then
-    certbot_args=(certonly --webroot -w /var/www/acme --non-interactive --agree-tos --expand
-                  --cert-name "${VPN_DOMAIN}" -m "${ACME_EMAIL}"
-                  --key-type ecdsa --elliptic-curve secp256r1)
-    for d in "${cert_domains[@]}"; do certbot_args+=(-d "$d"); done
-    log "Пробный выпуск сертификата (Let's Encrypt staging — не расходует лимиты): ${cert_domains[*]}"
-    certbot "${certbot_args[@]}" --dry-run || die "Проверка домена не прошла: A-запись ${VPN_DOMAIN} и доступность порта 80 снаружи (firewall хостера).$(
-        [[ ${CDN_ENABLE} == yes ]] && printf '\n  Для %s: в Cloudflare временно выключите SSL/TLS -> Edge Certificates -> «Always Use HTTPS»\n  (иначе проверка уходит на HTTPS, где сертификата ещё нет), после выпуска можно включить обратно.' "${CDN_DOMAIN}")"
-    log "Выпуск сертификата: ${cert_domains[*]}"
-    certbot "${certbot_args[@]}" || die "Сертификат не выпущен (см. вывод certbot выше)."
+cert_has() {
+    [[ -f ${cert_file} ]] && openssl x509 -noout -ext subjectAltName -in "${cert_file}" 2>/dev/null | grep -q "DNS:${1}\b"
+}
+# issue_cert <домен>... — 1, если не прошла пробная проверка (staging, не расходует лимиты).
+issue_cert() {
+    local args=(certonly --webroot -w /var/www/acme --non-interactive --agree-tos --expand
+                --cert-name "${VPN_DOMAIN}" -m "${ACME_EMAIL}"
+                --key-type ecdsa --elliptic-curve secp256r1) d
+    for d in "$@"; do args+=(-d "$d"); done
+    log "Пробный выпуск сертификата (Let's Encrypt staging): $*"
+    certbot "${args[@]}" --dry-run || return 1
+    log "Выпуск сертификата: $*"
+    certbot "${args[@]}" || die "Сертификат не выпущен (см. вывод certbot выше)."
+}
+if ! cert_has "${VPN_DOMAIN}" || { [[ ${CDN_ENABLE} == yes ]] && ! cert_has "${CDN_DOMAIN}"; }; then
+    if [[ ${CDN_ENABLE} == yes ]] && issue_cert "${VPN_DOMAIN}" "${CDN_DOMAIN}"; then
+        :
+    else
+        if [[ ${CDN_ENABLE} == yes ]]; then
+            warn "Let's Encrypt не проверил ${CDN_DOMAIN} через CDN — сертификат сервера будет только на ${VPN_DOMAIN}."
+            warn "  Gcore это не мешает. Cloudflare в режиме Full (strict) ответит ошибкой 526: выключите на время"
+            warn "  SSL/TLS -> Edge Certificates -> «Always Use HTTPS» и запустите скрипт снова."
+        fi
+        cert_has "${VPN_DOMAIN}" || issue_cert "${VPN_DOMAIN}" \
+            || die "Проверка домена ${VPN_DOMAIN} не прошла: A-запись -> ${PUBLIC_IPV4:-IP сервера} и доступность порта 80 снаружи (firewall хостера)."
+    fi
 fi
 install -d /etc/letsencrypt/renewal-hooks/deploy
 printf '#!/bin/sh\nsystemctl reload nginx\n' > /etc/letsencrypt/renewal-hooks/deploy/nginx-reload.sh

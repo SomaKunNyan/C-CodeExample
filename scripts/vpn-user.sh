@@ -11,7 +11,7 @@
 #    vpn-user.sh list                  — пользователи, трафик, кто онлайн и с каких IP
 #    vpn-user.sh selftest <user> [cdn] — подключиться к серверу с ключами пользователя
 #                                        прямо с сервера (проверка без телефона и сети);
-#                                        cdn — через Cloudflare (полный путь CDN -> сервер)
+#                                        cdn — через CDN (полный путь CDN -> сервер)
 # =============================================================================
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -90,7 +90,7 @@ case "$cmd" in
         work="$(mktemp -d)"
         trap 'kill "${pid:-}" 2>/dev/null; rm -rf "${work}"' EXIT
         # Прямой вариант — к 127.0.0.1 (проверка сервера); CDN — по настоящему адресу
-        # через Cloudflare (проверка всей цепочки CDN -> 443 -> nginx -> Xray).
+        # через CDN (проверка всей цепочки CDN -> 443 -> nginx -> Xray).
         addr_filter='.outbounds[0].settings.vnext[0].address = "127.0.0.1" |'
         [[ $variant == cdn ]] && addr_filter=""
         xray_py client-config "$user" ${variant:+"$variant"} | jq "
