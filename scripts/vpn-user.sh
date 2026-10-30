@@ -22,6 +22,27 @@ require_reality
 
 usage() { sed -n '3,14p' "$0" | sed 's/^#  \{0,1\}//'; exit 1; }
 
+# Подсказка по журналу клиента для типичных ошибок настройки CDN.
+cdn_hint() {
+    local logf=$1 code
+    code="$(grep -oE '(unexpected status|bad status code:|response code:) *[0-9]{3}' "$logf" | grep -oE '[0-9]{3}$' | tail -n1 || true)"
+    if grep -q 'redirects' "$logf"; then
+        warn "Подсказка: CDN обращается к серверу по HTTP (порт 80), а nginx отвечает редиректом на"
+        warn "  https://${VPN_DOMAIN}/ — получается петля. В CDN-ресурсе: протокол получения данных с источника"
+        warn "  HTTPS, порт 443 (Cloudflare: SSL/TLS = Full (strict), не Flexible)."
+    elif grep -qiE 'x509|certificate' "$logf"; then
+        warn "Подсказка: у CDN нет действующего сертификата на ${CDN_DOMAIN} — выпустите его в настройках CDN-ресурса."
+    elif [[ $code == 404 ]]; then
+        warn "Подсказка: 404 — запрос дошёл до сервера, но не на вход VPN. В CDN-ресурсе заголовок Host"
+        warn "  (Gcore: «Переопределение заголовка Host») должен быть ${CDN_DOMAIN}."
+    elif [[ $code =~ ^(5[0-9][0-9])$ ]]; then
+        warn "Подсказка: ${code} — CDN не получил ответа от сервера: источник ${PUBLIC_IPV4:-IP сервера}, HTTPS, порт 443;"
+        warn "  на сервере: ss -tlnp | grep ${CDN_XRAY_PORT}; ресурс CDN может ещё активироваться."
+    elif [[ $code =~ ^4 ]]; then
+        warn "Подсказка: ${code} — CDN отклоняет запрос: проверьте, что разрешены методы GET и POST и выключены WAF/лимиты."
+    fi
+}
+
 check_name() {
     [[ ${1:-} =~ ^[a-z][a-z0-9._-]{1,31}$ ]] || die "Имя: латиница в нижнем регистре, цифры . _ - (2–32 символа)."
 }
@@ -107,6 +128,7 @@ case "$cmd" in
         else
             warn "Самопроверка НЕ пройдена. Журнал клиента:"
             grep -Ei 'reality|error|fail|warn|xhttp|tls' "${work}/client.log" | tail -n 20
+            [[ $variant == cdn ]] && cdn_hint "${work}/client.log"
             warn "Журнал сервера: journalctl -u xray -n 50 --no-pager"
             exit 1
         fi
