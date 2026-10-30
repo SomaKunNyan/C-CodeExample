@@ -164,9 +164,10 @@ fi
 
 log "VPN-сервер запущен: VLESS + REALITY (${XRAY_TRANSPORT}) на ${PUBLIC_IPV4:-${WAN_IPV4}}:${XRAY_PORT}, маскировка под ${dest_host}"
 [[ ${CDN_ENABLE} == yes ]] && log "Вход через CDN: ${CDN_DOMAIN} -> CDN -> 443 -> nginx -> Xray 127.0.0.1:${CDN_XRAY_PORT}"
-if [[ ${ENC_ENABLE} == yes ]]; then
-    log "Вход VLESS Encryption без TLS (${ENC_MODE}): TCP/${ENC_PORT}"
-    nft list chain inet filter input 2>/dev/null | grep -q "tcp dport ${ENC_PORT} accept" \
-        || warn "Порт ${ENC_PORT} закрыт в nftables — выполните: sudo ./scripts/02-firewall.sh"
-fi
+[[ ${ENC_ENABLE} == yes ]] && log "Вход VLESS Encryption без TLS (${ENC_MODE}): TCP/${ENC_PORT}"
+[[ ${MASK_ENABLE} == yes ]] && log "Вход REALITY в маске sudoku (${MASK_ASCII}): TCP/${MASK_PORT}"
+for port in $([[ ${ENC_ENABLE} == yes ]] && echo "${ENC_PORT}") $([[ ${MASK_ENABLE} == yes ]] && echo "${MASK_PORT}"); do
+    nft list chain inet filter input 2>/dev/null | grep -q "tcp dport ${port} accept" \
+        || warn "Порт ${port} закрыт в nftables — выполните: sudo ./scripts/02-firewall.sh"
+done
 log "Добавьте пользователя: sudo ./scripts/vpn-user.sh add <имя>"

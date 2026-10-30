@@ -49,6 +49,7 @@ load_config() {
     : "${REALITY_DEST:=}" "${REALITY_SERVER_NAMES:=}" "${CLIENT_FINGERPRINT:=chrome}"
     : "${BLOCK_BITTORRENT:=yes}" "${XRAY_ACCESS_LOG:=no}" "${CLIENT_DIRECT_RU:=yes}"
     : "${REALITY_MIRROR_PORTS:=no}" "${ENC_ENABLE:=no}" "${ENC_PORT:=47443}" "${ENC_MODE:=random}"
+    : "${MASK_ENABLE:=no}" "${MASK_PORT:=46443}" "${MASK_ASCII:=prefer_ascii}" "${FRAG_LENGTH:=100-200}" "${FRAG_DELAY:=10-20}"
     : "${XRAY_LOGLEVEL:=warning}" "${PUBLIC_IPV4:=}" "${LINK_ADDRESS:=ip}"
     : "${XRAY_TRANSPORT:=xhttp}" "${XHTTP_MODE:=auto}" "${XHTTP_PATH:=}"
     : "${REALITY_SELF_SITE:=no}" "${ACME_EMAIL:=}" "${SELF_SITE_PORT:=8443}" "${SITE_TITLE:=}"
@@ -61,15 +62,21 @@ load_config() {
         die "REALITY_MIRROR_PORTS=\"yes\" — только для маскировки под чужой сайт; при REALITY_SELF_SITE=\"yes\" порт 80 обслуживает свой nginx."
     fi
     case "${ENC_MODE}" in random|xorpub|native) ;; *) die "ENC_MODE=${ENC_MODE}: допустимо random, xorpub, native." ;; esac
-    if [[ ${ENC_ENABLE} == yes ]]; then
-        if [[ ! ${ENC_PORT} =~ ^[0-9]+$ ]] || (( ENC_PORT < 1 || ENC_PORT > 65535 )); then
-            die "ENC_PORT=${ENC_PORT}: нужен номер порта 1-65535."
+    case "${MASK_ASCII}" in prefer_ascii|prefer_entropy) ;; *) die "MASK_ASCII=${MASK_ASCII}: допустимо prefer_ascii, prefer_entropy." ;; esac
+    # Дополнительные входы на своих портах: номер корректен и не занят другой службой проекта.
+    local var en pn port p taken=("${XRAY_PORT}" "${SSH_PORT}" "${XRAY_API_PORT}" 80 "${SELF_SITE_PORT}" "${CDN_XRAY_PORT}")
+    for var in ENC MASK; do
+        en="${var}_ENABLE" pn="${var}_PORT"
+        [[ ${!en} == yes ]] || continue
+        port="${!pn}"
+        if [[ ! ${port} =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+            die "${var}_PORT=${port}: нужен номер порта 1-65535."
         fi
-        local p
-        for p in "${XRAY_PORT}" "${SSH_PORT}" "${XRAY_API_PORT}" 80 "${SELF_SITE_PORT}" "${CDN_XRAY_PORT}"; do
-            [[ ${ENC_PORT} != "$p" ]] || die "ENC_PORT=${ENC_PORT} уже занят другой службой проекта — выберите другой."
+        for p in "${taken[@]}"; do
+            [[ ${port} != "$p" ]] || die "${var}_PORT=${port} уже занят другой службой проекта — выберите другой."
         done
-    fi
+        taken+=("${port}")
+    done
     case "${XRAY_TRANSPORT}" in xhttp|vision) ;; *) die "XRAY_TRANSPORT=${XRAY_TRANSPORT}: допустимо xhttp или vision." ;; esac
     case "${XHTTP_MODE}" in auto|packet-up|stream-up|stream-one) ;; *) die "XHTTP_MODE=${XHTTP_MODE}: допустимо auto, packet-up, stream-up, stream-one." ;; esac
     : "${SPLIT_EXCLUDE_FILE:=${PROJECT_DIR}/split-exclude.txt}"
@@ -108,7 +115,7 @@ load_config() {
            XRAY_ACCESS_LOG XRAY_LOGLEVEL CLIENT_DIRECT_RU SPLIT_EXCLUDE_FILE PUBLIC_IPV4 LINK_ADDRESS \
            XRAY_TRANSPORT XHTTP_MODE XHTTP_PATH REALITY_SELF_SITE ACME_EMAIL SELF_SITE_PORT SITE_TITLE \
            CDN_ENABLE CDN_DOMAIN CDN_XRAY_PORT CDN_PATH REALITY_MIRROR_PORTS \
-           ENC_ENABLE ENC_PORT ENC_MODE
+           ENC_ENABLE ENC_PORT ENC_MODE MASK_ENABLE MASK_PORT MASK_ASCII FRAG_LENGTH FRAG_DELAY
 }
 
 # Резервная копия файла перед перезаписью.

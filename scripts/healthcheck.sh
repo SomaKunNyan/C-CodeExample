@@ -77,6 +77,12 @@ if [[ ${ENC_ENABLE} == yes ]]; then
     chk "порт ${ENC_PORT} открыт в nftables" bash -c "nft list chain inet filter input | grep -q 'tcp dport ${ENC_PORT} accept'"
 fi
 
+if [[ ${MASK_ENABLE} == yes ]]; then
+    echo "== REALITY в маске (TCP/${MASK_PORT}, ${MASK_ASCII})"
+    chk "вход слушает TCP/${MASK_PORT}" bash -c "ss -Htln 'sport = :${MASK_PORT}' | grep -q ."
+    chk "порт ${MASK_PORT} открыт в nftables" bash -c "nft list chain inet filter input | grep -q 'tcp dport ${MASK_PORT} accept'"
+fi
+
 echo "== Сеть"
 chk "BBR"                         bash -c "[[ \$(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]"
 chk "политика input = drop"       bash -c "nft list chain inet filter input | grep -q 'policy drop'"

@@ -14,7 +14,7 @@ VPN-сервер на **Xray: VLESS + REALITY** (транспорт **XHTTP** и
 | Пользователи | UUID на пользователя, ссылки `vless://` и QR-коды, блокировка/перевыпуск, трафик и онлайн по каждому |
 | Запасной вход | через **CDN (Gcore, Cloudflare)**, если IP сервера режется провайдером: `CDN_ENABLE`, вторая ссылка |
 | Маскировка снаружи | подбор сайта `find-dest.sh` (RealiTLScanner + проверки); зеркало TCP/80 и UDP/443 сайта (`REALITY_MIRROR_PORTS`) |
-| Без TLS (эксперимент) | **VLESS Encryption** на отдельном порту: нет ClientHello/SNI, поток выглядит случайным (`ENC_ENABLE`) |
+| Если режут рукопожатие | фрагментация ClientHello (`link … frag`), REALITY в маске sudoku (`MASK_ENABLE`), **VLESS Encryption** без TLS (`ENC_ENABLE`) — эксперименты, [09](docs/09-handshake-masking.md) |
 | Исключения | сайты мимо VPN — по доменам, на стороне клиента (`split-exclude.txt`, «регион Россия» в Hiddify) |
 | Hardening ОС | SSH только по ключам, nftables default-deny, fail2ban, auditd, AppArmor, sysctl, автообновления |
 | Изоляция | Xray без root, песочница systemd; клиентам закрыт доступ к сети ДЦ и к самому серверу; SMTP/BitTorrent заблокированы |
@@ -105,7 +105,8 @@ sudo apt purge ocserv certbot         # по желанию, после пров
     ├── 05-operations.md           # мониторинг, обновления, смена IP, бэкап, инциденты
     ├── 06-split-tunneling.md      # сайты мимо VPN
     ├── 07-cdn.md                  # запасной вход через CDN (Gcore, Cloudflare)
-    └── 08-vless-encryption.md     # вход без TLS: VLESS Encryption (эксперимент)
+    ├── 08-vless-encryption.md     # вход без TLS: VLESS Encryption (эксперимент)
+    └── 09-handshake-masking.md    # если режут TLS-рукопожатие: фрагментация, маска, без TLS
 ```
 
 ## Проверка

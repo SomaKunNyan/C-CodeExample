@@ -12,7 +12,8 @@
 WAN_IPV4, WAN_IPV6, BLOCK_BITTORRENT, XRAY_ACCESS_LOG, XRAY_LOGLEVEL, XRAY_API_PORT,
 CLIENT_FINGERPRINT, SPLIT_EXCLUDE_FILE, CLIENT_DIRECT_RU, PUBLIC_IPV4, LINK_ADDRESS,
 XRAY_TRANSPORT (xhttp | vision), XHTTP_PATH, XHTTP_MODE,
-CDN_ENABLE, CDN_DOMAIN, CDN_XRAY_PORT, CDN_PATH, ENC_ENABLE, ENC_PORT, ENC_MODE.
+CDN_ENABLE, CDN_DOMAIN, CDN_XRAY_PORT, CDN_PATH, ENC_ENABLE, ENC_PORT, ENC_MODE,
+MASK_ENABLE, MASK_PORT, MASK_ASCII, FRAG_LENGTH, FRAG_DELAY.
 
 Команды:
     server                      конфиг сервера -> stdout
@@ -20,9 +21,12 @@ CDN_ENABLE, CDN_DOMAIN, CDN_XRAY_PORT, CDN_PATH, ENC_ENABLE, ENC_PORT, ENC_MODE.
     add NAME UUID               добавить пользователя
     set NAME enabled|disabled   включить/выключить
     del NAME                    удалить
-    link NAME [cdn|enc]         ссылка vless:// для клиента (cdn — через CDN,
-                                enc — VLESS Encryption без TLS)
-    client-config NAME [cdn|enc] полный JSON-конфиг клиента Xray с исключениями
+    link NAME [VARIANT]         ссылка vless:// для клиента; VARIANT:
+                                cdn  — через CDN;
+                                enc  — VLESS Encryption без TLS;
+                                mask — REALITY в маске sudoku (отдельный порт);
+                                frag — REALITY с фрагментацией ClientHello на клиенте
+    client-config NAME [VARIANT] полный JSON-конфиг клиента Xray с исключениями
     list                        таблица: пользователи, трафик, онлайн и IP (через API Xray)
 """
 
@@ -256,34 +260,11 @@ def build_server():
         # Домены, к которым обращаются клиенты, резолвит локальный unbound.
         "dns": {"servers": ["127.0.0.1"], "queryStrategy": target_strategy},
         "inbounds": [
-            {
-                "tag": "vless-reality",
-                "port": port,
-                "protocol": "vless",
-                "settings": {"clients": clients, "decryption": "none"},
-                "streamSettings": {
-                    **stream_base(),
-                    "security": "reality",
-                    "realitySettings": {
-                        # Подробности проверки REALITY (SNI, shortId, ключ) — в журнал;
-                        # только при XRAY_LOGLEVEL=debug.
-                        "show": env("XRAY_LOGLEVEL", "warning") == "debug",
-                        "target": env("REALITY_DEST", required=True),
-                        "xver": 0,
-                        "serverNames": server_names(),
-                        "privateKey": k["privateKey"],
-                        "shortIds": k["shortIds"],
-                    },
-                    "sockopt": {"tcpFastOpen": True},
-                },
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "tls", "quic"],
-                    "routeOnly": True,
-                },
-            }
+            reality_inbound(clients, k, "vless-reality", port),
         ] + ([cdn_inbound(clients)] if cdn_enabled() else [])
-          + ([enc_inbound(clients)] if enc_enabled() else []),
+          + ([enc_inbound(clients)] if enc_enabled() else [])
+          + ([reality_inbound(clients, k, "vless-reality-mask", int(env("MASK_PORT", "46443")),
+                              mask_finalmask())] if mask_enabled() else []),
         "outbounds": [
             {
                 "tag": "direct",
@@ -297,6 +278,61 @@ def build_server():
         ],
         "routing": {"domainStrategy": "AsIs", "rules": rules},
     }
+
+
+def reality_inbound(clients, k, tag, port, finalmask=None):
+    stream = {
+        **stream_base(),
+        "security": "reality",
+        "realitySettings": {
+            # Подробности проверки REALITY (SNI, shortId, ключ) — в журнал;
+            # только при XRAY_LOGLEVEL=debug.
+            "show": env("XRAY_LOGLEVEL", "warning") == "debug",
+            "target": env("REALITY_DEST", required=True),
+            "xver": 0,
+            "serverNames": server_names(),
+            "privateKey": k["privateKey"],
+            "shortIds": k["shortIds"],
+        },
+        "sockopt": {"tcpFastOpen": True},
+    }
+    if finalmask:
+        stream["finalmask"] = finalmask
+    return {
+        "tag": tag,
+        "port": port,
+        "protocol": "vless",
+        "settings": {"clients": clients, "decryption": "none"},
+        "streamSettings": stream,
+        "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": True},
+    }
+
+
+def mask_enabled():
+    return env("MASK_ENABLE", "no") == "yes"
+
+
+def mask_finalmask():
+    """Маска finalmask "sudoku" (с обеих сторон): весь поток, включая ClientHello
+    REALITY, перекодируется — по 4 «подсказки» судоку на байт, в режиме prefer_ascii
+    это печатные символы. DPI не видит ни TLS, ни случайного шума. Пароль выводится
+    из закрытого ключа REALITY (стабильный, сам ключ не раскрывает)."""
+    password = hashlib.sha256((keys()["privateKey"] + "/sudoku").encode()).hexdigest()[:32]
+    ascii_mode = env("MASK_ASCII", "prefer_ascii")
+    if ascii_mode not in ("prefer_ascii", "prefer_entropy"):
+        die(f'MASK_ASCII="{ascii_mode}": допустимо "prefer_ascii" или "prefer_entropy"')
+    return {"tcp": [{"type": "sudoku", "settings": {"password": password, "ascii": ascii_mode}}]}
+
+
+def frag_finalmask():
+    """Маска finalmask "fragment" (только клиент): ClientHello уходит кусками по
+    FRAG_LENGTH байт с паузами FRAG_DELAY мс. Сервер ничего не меняет: TCP собирает
+    поток сам, REALITY видит обычный ClientHello."""
+    return {"tcp": [{"type": "fragment", "settings": {
+        "packets": "tlshello",
+        "length": env("FRAG_LENGTH", "100-200"),
+        "delay": env("FRAG_DELAY", "10-20"),
+    }}]}
 
 
 def cdn_inbound(clients):
@@ -346,12 +382,26 @@ def client_params(u):
 
 
 def check_variant(variant):
-    if variant not in ("", "cdn", "enc"):
-        die(f'вариант "{variant}": допустимо cdn или enc')
+    if variant not in ("", "cdn", "enc", "mask", "frag"):
+        die(f'вариант "{variant}": допустимо cdn, enc, mask или frag')
     if variant == "cdn" and not cdn_enabled():
         die("CDN не включён (CDN_ENABLE в config.env)")
     if variant == "enc" and not enc_enabled():
         die("VLESS Encryption не включён (ENC_ENABLE в config.env)")
+    if variant == "mask" and not mask_enabled():
+        die("Вход с маской не включён (MASK_ENABLE в config.env)")
+
+
+def reality_client_params(u, variant):
+    """Параметры REALITY-профиля: прямой, в маске sudoku (свой порт) или с фрагментацией."""
+    p = client_params(u)
+    p["finalmask"] = None
+    if variant == "mask":
+        p["port"] = int(env("MASK_PORT", "46443"))
+        p["finalmask"] = mask_finalmask()
+    elif variant == "frag":
+        p["finalmask"] = frag_finalmask()
+    return p
 
 
 def build_link(u, variant=""):
@@ -377,7 +427,7 @@ def build_link(u, variant=""):
         }, quote_via=urllib.parse.quote)
         tag = urllib.parse.quote(f"{u['name']}@{p['host']} (ENC)")
         return f"vless://{p['id']}@{host}:{env('ENC_PORT', '47443')}?{q}#{tag}"
-    p = client_params(u)
+    p = reality_client_params(u, variant)
     host = f"[{p['host']}]" if ":" in p["host"] else p["host"]
     # "encryption" и "headerType" не указываем: по стандарту ссылок VLESS
     # по умолчанию это "none", а клиенты на sing-box (Hiddify, NekoBox, Karing)
@@ -394,8 +444,13 @@ def build_link(u, variant=""):
         params.update({"type": "xhttp", "path": xhttp_path(), "mode": env("XHTTP_MODE", "auto")})
     else:
         params.update({"type": "tcp", "flow": flow()})
+    if p["finalmask"]:
+        # "fm" — finalmask в ссылке (v2rayNG 2.3.14+): JSON, который клиент кладёт в
+        # streamSettings.finalmask.
+        params["fm"] = json.dumps(p["finalmask"], separators=(",", ":"))
     q = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
-    tag = urllib.parse.quote(f"{u['name']}@{p['host']}")
+    suffix = {"mask": " (MASK)", "frag": " (FRAG)"}.get(variant, "")
+    tag = urllib.parse.quote(f"{u['name']}@{p['host']}{suffix}")
     return f"vless://{p['id']}@{host}:{p['port']}?{q}#{tag}"
 
 
@@ -426,7 +481,7 @@ def build_client(u, variant=""):
         user_flow = "xtls-rprx-vision"
         user_enc = enc_encryption()
     else:
-        p = client_params(u)
+        p = reality_client_params(u, variant)
         proxy_stream = {
             **client_stream_base(),
             "security": "reality",
@@ -435,6 +490,8 @@ def build_client(u, variant=""):
                 "publicKey": p["pbk"], "shortId": p["sid"], "spiderX": "/",
             },
         }
+        if p["finalmask"]:
+            proxy_stream["finalmask"] = p["finalmask"]
         user_flow = flow()
         user_enc = "none"
     domains, nets = split_list()
