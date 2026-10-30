@@ -71,6 +71,12 @@ if [[ ${CDN_ENABLE} == yes ]]; then
         bash -c "[[ \$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 'https://${CDN_DOMAIN}/') == 200 ]]"
 fi
 
+if [[ ${ENC_ENABLE} == yes ]]; then
+    echo "== VLESS Encryption (TCP/${ENC_PORT}, ${ENC_MODE})"
+    chk "вход слушает TCP/${ENC_PORT}" bash -c "ss -Htln 'sport = :${ENC_PORT}' | grep -q ."
+    chk "порт ${ENC_PORT} открыт в nftables" bash -c "nft list chain inet filter input | grep -q 'tcp dport ${ENC_PORT} accept'"
+fi
+
 echo "== Сеть"
 chk "BBR"                         bash -c "[[ \$(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]"
 chk "политика input = drop"       bash -c "nft list chain inet filter input | grep -q 'policy drop'"

@@ -2,7 +2,8 @@
 """Генератор конфигураций Xray (VLESS + REALITY + XTLS Vision).
 
 Хранилище (по умолчанию /etc/xray):
-    keys.json   — ключи REALITY (privateKey, publicKey) и shortIds сервера
+    keys.json   — ключи REALITY (privateKey, publicKey) и shortIds сервера,
+                  ключи VLESS Encryption (encServerKey, encClientKey)
     users.json  — пользователи: name, id (UUID), enabled, created
     config.json — конфигурация сервера (генерируется командой `server`)
 
@@ -11,7 +12,7 @@
 WAN_IPV4, WAN_IPV6, BLOCK_BITTORRENT, XRAY_ACCESS_LOG, XRAY_LOGLEVEL, XRAY_API_PORT,
 CLIENT_FINGERPRINT, SPLIT_EXCLUDE_FILE, CLIENT_DIRECT_RU, PUBLIC_IPV4, LINK_ADDRESS,
 XRAY_TRANSPORT (xhttp | vision), XHTTP_PATH, XHTTP_MODE,
-CDN_ENABLE, CDN_DOMAIN, CDN_XRAY_PORT, CDN_PATH.
+CDN_ENABLE, CDN_DOMAIN, CDN_XRAY_PORT, CDN_PATH, ENC_ENABLE, ENC_PORT, ENC_MODE.
 
 Команды:
     server                      конфиг сервера -> stdout
@@ -19,8 +20,9 @@ CDN_ENABLE, CDN_DOMAIN, CDN_XRAY_PORT, CDN_PATH.
     add NAME UUID               добавить пользователя
     set NAME enabled|disabled   включить/выключить
     del NAME                    удалить
-    link NAME [cdn]             ссылка vless:// для клиента (cdn — вариант через CDN)
-    client-config NAME [cdn]    полный JSON-конфиг клиента Xray с исключениями
+    link NAME [cdn|enc]         ссылка vless:// для клиента (cdn — через CDN,
+                                enc — VLESS Encryption без TLS)
+    client-config NAME [cdn|enc] полный JSON-конфиг клиента Xray с исключениями
     list                        таблица: пользователи, трафик, онлайн и IP (через API Xray)
 """
 
@@ -152,6 +154,49 @@ def cdn_path():
     return p if p.startswith("/") else "/" + p
 
 
+def enc_enabled():
+    return env("ENC_ENABLE", "no") == "yes"
+
+
+def enc_keys():
+    k = keys()
+    if not k.get("encServerKey") or not k.get("encClientKey"):
+        die("нет ключей VLESS Encryption: запустите scripts/03-install-vpn.sh (ENC_ENABLE=\"yes\")")
+    return k["encServerKey"], k["encClientKey"]
+
+
+def enc_mode():
+    m = env("ENC_MODE", "random")
+    if m not in ("random", "xorpub", "native"):
+        die(f'ENC_MODE="{m}": допустимо "random", "xorpub" или "native"')
+    return m
+
+
+def enc_inbound(clients):
+    """VLESS Encryption без TLS: ML-KEM-768 + X25519 (постквантовый обмен ключами),
+    аутентификация сервера ключом X25519. В режиме random все байты потока, включая
+    рукопожатие, выглядят случайными: ClientHello/SNI, по которым режут TLS, нет вовсе.
+    Поверх — XTLS Vision: выравнивает размеры пакетов вложенного TLS (TLS в TLS)."""
+    server_key, _ = enc_keys()
+    return {
+        "tag": "vless-enc",
+        "port": int(env("ENC_PORT", "47443")),
+        "protocol": "vless",
+        "settings": {
+            "clients": [dict(c, flow="xtls-rprx-vision") for c in clients],
+            # 600s — срок действия билета для 0-RTT повторных подключений.
+            "decryption": f"mlkem768x25519plus.{enc_mode()}.600s.{server_key}",
+        },
+        "streamSettings": {"network": "raw", "security": "none", "sockopt": {"tcpFastOpen": True}},
+        "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": True},
+    }
+
+
+def enc_encryption():
+    _, client_key = enc_keys()
+    return f"mlkem768x25519plus.{enc_mode()}.0rtt.{client_key}"
+
+
 def stream_base():
     """Транспортная часть streamSettings (без security), общая для сервера и клиента."""
     if transport() == "xhttp":
@@ -237,7 +282,8 @@ def build_server():
                     "routeOnly": True,
                 },
             }
-        ] + ([cdn_inbound(clients)] if cdn_enabled() else []),
+        ] + ([cdn_inbound(clients)] if cdn_enabled() else [])
+          + ([enc_inbound(clients)] if enc_enabled() else []),
         "outbounds": [
             {
                 "tag": "direct",
@@ -299,7 +345,17 @@ def client_params(u):
     }
 
 
+def check_variant(variant):
+    if variant not in ("", "cdn", "enc"):
+        die(f'вариант "{variant}": допустимо cdn или enc')
+    if variant == "cdn" and not cdn_enabled():
+        die("CDN не включён (CDN_ENABLE в config.env)")
+    if variant == "enc" and not enc_enabled():
+        die("VLESS Encryption не включён (ENC_ENABLE в config.env)")
+
+
 def build_link(u, variant=""):
+    check_variant(variant)
     if variant == "cdn":
         p = cdn_params(u)
         # Через CDN: обычный TLS к узлу CDN (SNI = CDN-домен), XHTTP packet-up —
@@ -310,6 +366,17 @@ def build_link(u, variant=""):
         }, quote_via=urllib.parse.quote)
         tag = urllib.parse.quote(f"{u['name']}@{p['host']} (CDN)")
         return f"vless://{p['id']}@{p['host']}:{p['port']}?{q}#{tag}"
+    if variant == "enc":
+        p = client_params(u)
+        host = f"[{p['host']}]" if ":" in p["host"] else p["host"]
+        # Только клиенты на ядре Xray (v2rayNG, v2rayN, v2RayTun...): sing-box
+        # VLESS Encryption не поддерживает.
+        q = urllib.parse.urlencode({
+            "encryption": enc_encryption(), "security": "none",
+            "type": "tcp", "flow": "xtls-rprx-vision",
+        }, quote_via=urllib.parse.quote)
+        tag = urllib.parse.quote(f"{u['name']}@{p['host']} (ENC)")
+        return f"vless://{p['id']}@{host}:{env('ENC_PORT', '47443')}?{q}#{tag}"
     p = client_params(u)
     host = f"[{p['host']}]" if ":" in p["host"] else p["host"]
     # "encryption" и "headerType" не указываем: по стандарту ссылок VLESS
@@ -340,6 +407,7 @@ def client_stream_base():
 
 
 def build_client(u, variant=""):
+    check_variant(variant)
     if variant == "cdn":
         c = cdn_params(u)
         proxy_stream = {
@@ -350,6 +418,13 @@ def build_client(u, variant=""):
         }
         p = {"host": c["host"], "port": c["port"], "id": c["id"]}
         user_flow = ""
+        user_enc = "none"
+    elif variant == "enc":
+        c = client_params(u)
+        proxy_stream = {"network": "raw", "security": "none"}
+        p = {"host": c["host"], "port": int(env("ENC_PORT", "47443")), "id": c["id"]}
+        user_flow = "xtls-rprx-vision"
+        user_enc = enc_encryption()
     else:
         p = client_params(u)
         proxy_stream = {
@@ -361,6 +436,7 @@ def build_client(u, variant=""):
             },
         }
         user_flow = flow()
+        user_enc = "none"
     domains, nets = split_list()
     rules = [{"ip": ["geoip:private"], "outboundTag": "direct"}]
     if domains:
@@ -387,7 +463,7 @@ def build_client(u, variant=""):
                 "protocol": "vless",
                 "settings": {"vnext": [{
                     "address": p["host"], "port": p["port"],
-                    "users": [{"id": p["id"], "encryption": "none", "flow": user_flow}],
+                    "users": [{"id": p["id"], "encryption": user_enc, "flow": user_flow}],
                 }]},
                 "streamSettings": proxy_stream,
             },

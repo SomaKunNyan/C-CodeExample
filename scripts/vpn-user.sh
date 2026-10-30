@@ -3,15 +3,16 @@
 #  Управление пользователями VPN (Xray VLESS + REALITY).
 #    vpn-user.sh add <user>            — создать и показать ссылку + QR-код
 #    vpn-user.sh link <user>           — снова показать ссылку + QR-код
-#    vpn-user.sh client-config <user> [cdn] — JSON-конфиг Xray для клиента (с исключениями)
+#    vpn-user.sh client-config <user> [cdn|enc] — JSON-конфиг Xray для клиента (с исключениями)
 #    vpn-user.sh reset <user>          — новый UUID (старая ссылка перестанет работать)
 #    vpn-user.sh lock <user>           — заблокировать (сразу отключает)
 #    vpn-user.sh unlock <user>         — разблокировать
 #    vpn-user.sh del <user>            — удалить
 #    vpn-user.sh list                  — пользователи, трафик, кто онлайн и с каких IP
-#    vpn-user.sh selftest <user> [cdn] — подключиться к серверу с ключами пользователя
-#                                        прямо с сервера (проверка без телефона и сети);
-#                                        cdn — через CDN (полный путь CDN -> сервер)
+#    vpn-user.sh selftest <user> [cdn|enc] — подключиться к серверу с ключами
+#                                        пользователя прямо с сервера (проверка без
+#                                        телефона и сети); cdn — через CDN (полный путь
+#                                        CDN -> сервер); enc — VLESS Encryption без TLS
 # =============================================================================
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -64,12 +65,16 @@ check_name() {
 }
 
 show_link() {
-    local link variant title
-    for variant in "" ${CDN_ENABLE/#yes/cdn}; do
-        [[ $variant == no ]] && continue
+    local link variant title variants=("")
+    [[ ${CDN_ENABLE} == yes ]] && variants+=(cdn)
+    [[ ${ENC_ENABLE} == yes ]] && variants+=(enc)
+    for variant in "${variants[@]}"; do
         link="$(xray_py link "$1" ${variant:+"$variant"})"
-        title="REALITY — напрямую на сервер"
-        [[ $variant == cdn ]] && title="CDN (${CDN_DOMAIN}) — запасной вариант, если прямое подключение режется"
+        case "$variant" in
+            cdn) title="CDN (${CDN_DOMAIN}) — запасной вариант, если прямое подключение режется" ;;
+            enc) title="VLESS Encryption без TLS (порт ${ENC_PORT}) — эксперимент, только клиенты на ядре Xray" ;;
+            *)   title="REALITY — напрямую на сервер" ;;
+        esac
         echo
         log "Ссылка для ${1}: ${title}"
         echo
@@ -122,11 +127,12 @@ case "$cmd" in
         # shortId в порядке; значит, проблема в клиентском приложении или в сети.
         check_name "$user"
         variant="${3:-}"
-        [[ -z $variant || $variant == cdn ]] || die "selftest <user> [cdn]"
+        [[ -z $variant || $variant == cdn || $variant == enc ]] || die "selftest <user> [cdn|enc]"
         [[ $variant != cdn || ${CDN_ENABLE} == yes ]] || die "CDN не включён (CDN_ENABLE)."
+        [[ $variant != enc || ${ENC_ENABLE} == yes ]] || die "VLESS Encryption не включён (ENC_ENABLE)."
         work="$(mktemp -d)"
         trap 'kill "${pid:-}" 2>/dev/null; rm -rf "${work}"' EXIT
-        # Прямой вариант — к 127.0.0.1 (проверка сервера); CDN — по настоящему адресу
+        # Прямой вариант и enc — к 127.0.0.1 (проверка сервера); CDN — по настоящему адресу
         # через CDN (проверка всей цепочки CDN -> 443 -> nginx -> Xray).
         addr_filter='.outbounds[0].settings.vnext[0].address = "127.0.0.1" |'
         [[ $variant == cdn ]] && addr_filter=""

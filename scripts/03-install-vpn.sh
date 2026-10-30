@@ -75,6 +75,22 @@ if [[ ! -s ${XRAY_STORE}/keys.json ]]; then
         '{privateKey: $priv, publicKey: $pub, shortIds: [$sid]}' > "${XRAY_STORE}/keys.json"
     umask 022
 fi
+# Ключи VLESS Encryption (ENC_ENABLE): пара X25519 из `xray vlessenc` — сервер
+# аутентифицируется ей, обмен ключами сессии — ML-KEM-768 + X25519 (постквантовый).
+if [[ ${ENC_ENABLE} == yes ]] && ! jq -e '.encServerKey and .encClientKey' "${XRAY_STORE}/keys.json" >/dev/null; then
+    log "Генерация ключей VLESS Encryption"
+    encout="$("${XRAY_BIN}" vlessenc 2>&1)" \
+        || die "Эта версия Xray не умеет VLESS Encryption ('xray vlessenc'); обновите Xray (XRAY_VERSION=\"latest\")."
+    # Первая пара в выводе — аутентификация X25519 (короткий ключ для ссылки).
+    dec="$(grep -m1 '"decryption"' <<<"${encout}" | sed -E 's/.*"([^"]+)"[[:space:]]*$/\1/')"
+    enc="$(grep -m1 '"encryption"' <<<"${encout}" | sed -E 's/.*"([^"]+)"[[:space:]]*$/\1/')"
+    srv="${dec##*.}" cli="${enc##*.}"
+    [[ ${#srv} == 43 && ${#cli} == 43 ]] || die "Не удалось разобрать вывод 'xray vlessenc': ${encout}"
+    tmpk="$(mktemp "${XRAY_STORE}/keys.XXXXXX")"
+    jq --arg s "${srv}" --arg c "${cli}" '. + {encServerKey: $s, encClientKey: $c}' \
+        "${XRAY_STORE}/keys.json" > "${tmpk}"
+    mv -f "${tmpk}" "${XRAY_STORE}/keys.json"
+fi
 [[ -s ${XRAY_STORE}/users.json ]] || echo '{"users": []}' > "${XRAY_STORE}/users.json"
 chmod 0600 "${XRAY_STORE}/keys.json" "${XRAY_STORE}/users.json"
 
@@ -148,4 +164,9 @@ fi
 
 log "VPN-сервер запущен: VLESS + REALITY (${XRAY_TRANSPORT}) на ${PUBLIC_IPV4:-${WAN_IPV4}}:${XRAY_PORT}, маскировка под ${dest_host}"
 [[ ${CDN_ENABLE} == yes ]] && log "Вход через CDN: ${CDN_DOMAIN} -> CDN -> 443 -> nginx -> Xray 127.0.0.1:${CDN_XRAY_PORT}"
+if [[ ${ENC_ENABLE} == yes ]]; then
+    log "Вход VLESS Encryption без TLS (${ENC_MODE}): TCP/${ENC_PORT}"
+    nft list chain inet filter input 2>/dev/null | grep -q "tcp dport ${ENC_PORT} accept" \
+        || warn "Порт ${ENC_PORT} закрыт в nftables — выполните: sudo ./scripts/02-firewall.sh"
+fi
 log "Добавьте пользователя: sudo ./scripts/vpn-user.sh add <имя>"

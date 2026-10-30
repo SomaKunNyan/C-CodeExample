@@ -48,7 +48,7 @@ load_config() {
     : "${XRAY_VERSION:=latest}" "${XRAY_PORT:=443}" "${XRAY_API_PORT:=10085}"
     : "${REALITY_DEST:=}" "${REALITY_SERVER_NAMES:=}" "${CLIENT_FINGERPRINT:=chrome}"
     : "${BLOCK_BITTORRENT:=yes}" "${XRAY_ACCESS_LOG:=no}" "${CLIENT_DIRECT_RU:=yes}"
-    : "${REALITY_MIRROR_PORTS:=no}"
+    : "${REALITY_MIRROR_PORTS:=no}" "${ENC_ENABLE:=no}" "${ENC_PORT:=47443}" "${ENC_MODE:=random}"
     : "${XRAY_LOGLEVEL:=warning}" "${PUBLIC_IPV4:=}" "${LINK_ADDRESS:=ip}"
     : "${XRAY_TRANSPORT:=xhttp}" "${XHTTP_MODE:=auto}" "${XHTTP_PATH:=}"
     : "${REALITY_SELF_SITE:=no}" "${ACME_EMAIL:=}" "${SELF_SITE_PORT:=8443}" "${SITE_TITLE:=}"
@@ -59,6 +59,16 @@ load_config() {
     fi
     if [[ ${REALITY_MIRROR_PORTS} == yes && ${REALITY_SELF_SITE} == yes ]]; then
         die "REALITY_MIRROR_PORTS=\"yes\" — только для маскировки под чужой сайт; при REALITY_SELF_SITE=\"yes\" порт 80 обслуживает свой nginx."
+    fi
+    case "${ENC_MODE}" in random|xorpub|native) ;; *) die "ENC_MODE=${ENC_MODE}: допустимо random, xorpub, native." ;; esac
+    if [[ ${ENC_ENABLE} == yes ]]; then
+        if [[ ! ${ENC_PORT} =~ ^[0-9]+$ ]] || (( ENC_PORT < 1 || ENC_PORT > 65535 )); then
+            die "ENC_PORT=${ENC_PORT}: нужен номер порта 1-65535."
+        fi
+        local p
+        for p in "${XRAY_PORT}" "${SSH_PORT}" "${XRAY_API_PORT}" 80 "${SELF_SITE_PORT}" "${CDN_XRAY_PORT}"; do
+            [[ ${ENC_PORT} != "$p" ]] || die "ENC_PORT=${ENC_PORT} уже занят другой службой проекта — выберите другой."
+        done
     fi
     case "${XRAY_TRANSPORT}" in xhttp|vision) ;; *) die "XRAY_TRANSPORT=${XRAY_TRANSPORT}: допустимо xhttp или vision." ;; esac
     case "${XHTTP_MODE}" in auto|packet-up|stream-up|stream-one) ;; *) die "XHTTP_MODE=${XHTTP_MODE}: допустимо auto, packet-up, stream-up, stream-one." ;; esac
@@ -97,7 +107,8 @@ load_config() {
            XRAY_API_PORT REALITY_DEST REALITY_SERVER_NAMES CLIENT_FINGERPRINT BLOCK_BITTORRENT \
            XRAY_ACCESS_LOG XRAY_LOGLEVEL CLIENT_DIRECT_RU SPLIT_EXCLUDE_FILE PUBLIC_IPV4 LINK_ADDRESS \
            XRAY_TRANSPORT XHTTP_MODE XHTTP_PATH REALITY_SELF_SITE ACME_EMAIL SELF_SITE_PORT SITE_TITLE \
-           CDN_ENABLE CDN_DOMAIN CDN_XRAY_PORT CDN_PATH REALITY_MIRROR_PORTS
+           CDN_ENABLE CDN_DOMAIN CDN_XRAY_PORT CDN_PATH REALITY_MIRROR_PORTS \
+           ENC_ENABLE ENC_PORT ENC_MODE
 }
 
 # Резервная копия файла перед перезаписью.

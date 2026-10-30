@@ -51,6 +51,8 @@ table inet filter {
         tcp dport ${XRAY_PORT} accept
         # --- HTTP/80: только при своём сайте-заглушке (Let's Encrypt, редирект) ---
 ${NFT_HTTP_RULES}
+        # --- VLESS Encryption без TLS: только при ENC_ENABLE ---
+${NFT_ENC_RULES}
 
         # --- SSH ---
 ${NFT_SSH_RULES}

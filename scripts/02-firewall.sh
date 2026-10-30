@@ -72,12 +72,17 @@ table ip vpn_mirror {
     }
 }"
 fi
-export NFT_SSH_RULES NFT_HTTP_RULES NFT_FORWARD_RULES NFT_MIRROR_TABLE
+# Вход VLESS Encryption без TLS (ENC_ENABLE) — отдельный TCP-порт.
+NFT_ENC_RULES=""
+if [[ ${ENC_ENABLE} == yes ]]; then
+    NFT_ENC_RULES="        tcp dport ${ENC_PORT} accept"
+fi
+export NFT_SSH_RULES NFT_HTTP_RULES NFT_FORWARD_RULES NFT_MIRROR_TABLE NFT_ENC_RULES
 
 # --- Генерация и проверка --------------------------------------------------------
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
-envsubst '${XRAY_PORT} ${NFT_SSH_RULES} ${NFT_HTTP_RULES} ${NFT_FORWARD_RULES} ${NFT_MIRROR_TABLE}' \
+envsubst '${XRAY_PORT} ${NFT_SSH_RULES} ${NFT_HTTP_RULES} ${NFT_FORWARD_RULES} ${NFT_MIRROR_TABLE} ${NFT_ENC_RULES}' \
     < "${TEMPLATES_DIR}/nftables/nftables.conf.tpl" > "$tmp"
 nft -c -f "$tmp" || die "Синтаксическая ошибка в сгенерированных правилах ($tmp)."
 
