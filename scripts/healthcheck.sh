@@ -83,6 +83,13 @@ if [[ ${MASK_ENABLE} == yes ]]; then
     chk "порт ${MASK_PORT} открыт в nftables" bash -c "nft list chain inet filter input | grep -q 'tcp dport ${MASK_PORT} accept'"
 fi
 
+if [[ ${WARP_ENABLE} == yes ]]; then
+    echo "== Cloudflare WARP (${WARP_ROUTE})"
+    chk "аккаунт WARP есть (${XRAY_STORE}/warp.json)" test -s "${XRAY_STORE}/warp.json"
+    # Если WARP не отвечает, трафик идёт напрямую (fallback) — VPN работает, но без WARP.
+    chk "WARP отвечает (warp.sh test)" bash "${PROJECT_DIR}/scripts/warp.sh" test
+fi
+
 echo "== Сеть"
 chk "BBR"                         bash -c "[[ \$(sysctl -n net.ipv4.tcp_congestion_control) == bbr ]]"
 chk "политика input = drop"       bash -c "nft list chain inet filter input | grep -q 'policy drop'"

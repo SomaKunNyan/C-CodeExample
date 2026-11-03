@@ -15,6 +15,7 @@ VPN-сервер на **Xray: VLESS + REALITY** (транспорт **XHTTP** и
 | Запасной вход | через **CDN (Gcore, Cloudflare)**, если IP сервера режется провайдером: `CDN_ENABLE`, вторая ссылка |
 | Маскировка снаружи | подбор сайта `find-dest.sh` (RealiTLScanner + проверки); зеркало TCP/80 и UDP/443 сайта (`REALITY_MIRROR_PORTS`) |
 | Если режут рукопожатие | фрагментация ClientHello (`link … frag`), REALITY в маске sudoku (`MASK_ENABLE`), **VLESS Encryption** без TLS (`ENC_ENABLE`) — эксперименты, [09](docs/09-handshake-masking.md) |
+| Выход через WARP | выбранные сайты или весь трафик уходят с сервера через Cloudflare WARP — сайты видят адрес Cloudflare (`WARP_ENABLE`, [10](docs/10-warp.md)) |
 | Исключения | сайты мимо VPN — по доменам, на стороне клиента (`split-exclude.txt`, «регион Россия» в Hiddify) |
 | Hardening ОС | SSH только по ключам, nftables default-deny, fail2ban, auditd, AppArmor, sysctl, автообновления |
 | Изоляция | Xray без root, песочница systemd; клиентам закрыт доступ к сети ДЦ и к самому серверу; SMTP/BitTorrent заблокированы |
@@ -82,12 +83,14 @@ sudo apt purge ocserv certbot         # по желанию, после пров
 ├── install.sh                     # полная установка (шаги 01–04)
 ├── config.env.example             # все параметры проекта
 ├── split-exclude.example.txt      # пример списка сайтов мимо VPN (для клиентских конфигов)
+├── warp-domains.example.txt       # пример списка сайтов, идущих с сервера через WARP
 ├── scripts/
 │   ├── lib.sh                     # общие функции
 │   ├── 01-harden-system.sh        # hardening Debian
 │   ├── 02-firewall.sh             # nftables, применение с откатом
 │   ├── 03-install-vpn.sh          # Xray (проверка SHA-256), ключи REALITY, unbound
 │   ├── find-dest.sh               # подбор сайта для маскировки (REALITY_DEST)
+│   ├── warp.sh                    # Cloudflare WARP как выход сервера: регистрация, проверка
 │   ├── self-site.sh               # свой сайт-заглушка для REALITY: nginx + Let's Encrypt
 │   ├── 04-tune-performance.sh     # sysctl, NIC, CPU
 │   ├── vpn-user.sh                # пользователи: ссылки, QR, блокировка, статистика
@@ -106,7 +109,8 @@ sudo apt purge ocserv certbot         # по желанию, после пров
     ├── 06-split-tunneling.md      # сайты мимо VPN
     ├── 07-cdn.md                  # запасной вход через CDN (Gcore, Cloudflare)
     ├── 08-vless-encryption.md     # вход без TLS: VLESS Encryption (эксперимент)
-    └── 09-handshake-masking.md    # если режут TLS-рукопожатие: фрагментация, маска, без TLS
+    ├── 09-handshake-masking.md    # если режут TLS-рукопожатие: фрагментация, маска, без TLS
+    └── 10-warp.md                 # Cloudflare WARP как выход сервера
 ```
 
 ## Проверка

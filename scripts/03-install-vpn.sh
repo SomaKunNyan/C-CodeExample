@@ -137,6 +137,13 @@ if systemctl list-unit-files ocserv.service 2>/dev/null | grep -q '^ocserv\.serv
     systemctl disable --now ocserv vpn-split-routes.timer 2>/dev/null || true
 fi
 
+# Cloudflare WARP как выход сервера (WARP_ENABLE): аккаунт регистрируется один раз.
+if [[ ${WARP_ENABLE} == yes ]]; then
+    bash "${PROJECT_DIR}/scripts/warp.sh"
+    [[ ${WARP_ROUTE} == all || -s ${WARP_DOMAINS_FILE} ]] \
+        || die "WARP_ROUTE=domains, но нет списка ${WARP_DOMAINS_FILE}: cp warp-domains.example.txt warp-domains.txt"
+fi
+
 # --- 5. Конфигурация и запуск Xray --------------------------------------------
 log "Конфигурация Xray"
 install_file "${TEMPLATES_DIR}/systemd/xray.service" /etc/systemd/system/xray.service
@@ -157,6 +164,9 @@ fi
 log "VPN-сервер запущен: VLESS + REALITY (${XRAY_TRANSPORT}) на ${PUBLIC_IPV4:-${WAN_IPV4}}:${XRAY_PORT}, маскировка под ${dest_host}"
 [[ ${CDN_ENABLE} == yes ]] && log "Вход через CDN: ${CDN_DOMAIN} -> CDN -> 443 -> nginx -> Xray 127.0.0.1:${CDN_XRAY_PORT}"
 [[ ${ENC_ENABLE} == yes ]] && log "Вход VLESS Encryption без TLS (${ENC_MODE}): TCP/${ENC_PORT}"
+if [[ ${WARP_ENABLE} == yes ]]; then
+    log "Выход через Cloudflare WARP: $([[ ${WARP_ROUTE} == all ]] && echo "весь трафик" || echo "сайты из ${WARP_DOMAINS_FILE}"); проверка — sudo ./scripts/warp.sh test"
+fi
 [[ ${MASK_ENABLE} == yes ]] && log "Вход REALITY в маске sudoku (${MASK_ASCII}): TCP/${MASK_PORT}"
 for port in $([[ ${ENC_ENABLE} == yes ]] && echo "${ENC_PORT}") $([[ ${MASK_ENABLE} == yes ]] && echo "${MASK_PORT}"); do
     nft list chain inet filter input 2>/dev/null | grep -q "tcp dport ${port} accept" \

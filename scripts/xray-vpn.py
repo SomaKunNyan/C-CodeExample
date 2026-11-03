@@ -14,13 +14,15 @@ CLIENT_FINGERPRINT, SPLIT_EXCLUDE_FILE, CLIENT_DIRECT_RU, PUBLIC_IPV4, LINK_ADDR
 REALITY_MAX_TIME_DIFF,
 XRAY_TRANSPORT (xhttp | vision), XHTTP_PATH, XHTTP_MODE,
 CDN_ENABLE, CDN_DOMAIN, CDN_XRAY_PORT, CDN_PATH, ENC_ENABLE, ENC_PORT, ENC_MODE,
-MASK_ENABLE, MASK_PORT, MASK_ASCII, FRAG_LENGTH, FRAG_DELAY.
+MASK_ENABLE, MASK_PORT, MASK_ASCII, FRAG_LENGTH, FRAG_DELAY,
+WARP_ENABLE, WARP_ROUTE, WARP_DOMAINS_FILE, WARP_RESERVED.
 
 Команды:
     server                      конфиг сервера -> stdout
     users                       список пользователей (TSV: name enabled created id)
     add NAME UUID               добавить пользователя (со своим shortId)
     rotate-sids                 новые shortId всем пользователям (после смены ключей)
+    warp-test-config            конфиг временного Xray для проверки WARP (SOCKS 127.0.0.1:10898)
     set NAME enabled|disabled   включить/выключить
     del NAME                    удалить
     link NAME [VARIANT]         ссылка vless:// для клиента; VARIANT:
@@ -46,6 +48,7 @@ import urllib.parse
 
 STORE = os.environ.get("XRAY_STORE", "/etc/xray")
 KEYS = os.path.join(STORE, "keys.json")
+WARP = os.path.join(STORE, "warp.json")
 USERS = os.path.join(STORE, "users.json")
 NAME_RE = re.compile(r"^[a-z][a-z0-9._-]{1,31}$")
 # Российские сайты: база geosite и зоны .ru, .su, .рф (xn--p1ai).
@@ -247,6 +250,8 @@ def build_server():
     rules = []
     if env("BLOCK_BITTORRENT", "yes") == "yes":
         rules.append({"protocol": ["bittorrent"], "outboundTag": "block"})
+    if warp_enabled():
+        rules += warp_rules(own_ips)
 
     target_strategy = "UseIP" if env("WAN_IPV6", "") else "UseIPv4"
 
@@ -293,8 +298,109 @@ def build_server():
                 "streamSettings": {"sockopt": {"domainStrategy": target_strategy}},
             },
             {"tag": "block", "protocol": "blackhole"},
-        ],
-        "routing": {"domainStrategy": "AsIs", "rules": rules},
+        ] + ([warp_outbound()] if warp_enabled() else []),
+        "routing": {"domainStrategy": "AsIs", "rules": rules,
+                    **({"balancers": [WARP_BALANCER]} if warp_enabled() else {})},
+        # Раз в минуту — проверка, что WARP отвечает; если нет, балансировщик
+        # отправляет трафик напрямую (fallbackTag), а не в никуда.
+        **({"observatory": {"subjectSelector": ["warp"], "probeURL": "https://www.gstatic.com/generate_204",
+                            "probeInterval": "1m"}} if warp_enabled() else {}),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Cloudflare WARP как выход сервера: сайты видят адрес Cloudflare, а не VPS.
+WARP_BALANCER = {"tag": "warp-or-direct", "selector": ["warp"],
+                 "strategy": {"type": "random"}, "fallbackTag": "direct"}
+
+
+def warp_enabled():
+    return env("WARP_ENABLE", "no") == "yes"
+
+
+def warp_outbound():
+    w = load(WARP, None)
+    if not w:
+        die(f"нет {WARP}: зарегистрируйте аккаунт — sudo ./scripts/warp.sh")
+    reserved = w.get("reserved") or []
+    if env("WARP_RESERVED", ""):
+        try:
+            reserved = [int(x) for x in env("WARP_RESERVED").replace(" ", "").split(",")]
+        except ValueError:
+            reserved = []
+        if len(reserved) != 3 or not all(0 <= x <= 255 for x in reserved):
+            die('WARP_RESERVED: три числа 0-255 через запятую, например "12,34,56"')
+    settings = {
+        "secretKey": w["privateKey"],
+        "address": w["addresses"],
+        "peers": [{"publicKey": w["publicKey"], "endpoint": w["endpoint"], "keepAlive": 25}],
+        "mtu": w.get("mtu", 1280),
+        # Xray работает без CAP_NET_ADMIN: встроенный стек TCP/IP вместо TUN ядра.
+        "noKernelTun": True,
+    }
+    if reserved:
+        settings["reserved"] = reserved
+    return {"tag": "warp", "protocol": "wireguard", "settings": settings}
+
+
+def warp_list():
+    """WARP_DOMAINS_FILE -> (домены, IP) в формате правил Xray. Строки вида geosite:,
+    geoip:, domain:, full:, regexp:, keyword: — как есть; голый домен — domain:домен
+    (с поддоменами); IP или сеть — в список IP."""
+    path = env("WARP_DOMAINS_FILE", "")
+    domains, ips = [], []
+    if not path or not os.path.exists(path):
+        return domains, ips
+    with open(path, encoding="utf-8-sig") as f:
+        for raw in f:
+            entry = raw.split("#", 1)[0].strip()
+            if not entry:
+                continue
+            if entry.startswith("geoip:"):
+                ips.append(entry)
+            elif entry.split(":", 1)[0] in ("geosite", "domain", "full", "regexp", "keyword"):
+                domains.append(entry)
+            else:
+                try:
+                    ips.append(str(ipaddress.ip_network(entry, strict=False)))
+                except ValueError:
+                    d = entry.lower().rstrip(".").removeprefix("*.")
+                    if not d.isascii():
+                        d = d.encode("idna").decode("ascii")
+                    domains.append(f"domain:{d}")
+    return domains, ips
+
+
+def warp_rules(own_ips):
+    """Правила маршрутизации в WARP: сайты из WARP_DOMAINS_FILE или (WARP_ROUTE=all)
+    весь трафик. Запреты (частные сети, адреса самого сервера, SMTP) — раньше WARP:
+    finalRules freedom на трафик в WARP не действуют."""
+    route = env("WARP_ROUTE", "domains")
+    if route not in ("domains", "all"):
+        die(f'WARP_ROUTE="{route}": допустимо "domains" или "all"')
+    rules = [
+        {"ip": ["geoip:private"] + own_ips, "outboundTag": "block"},
+        {"network": "tcp", "port": "25", "outboundTag": "block"},
+    ]
+    domains, ips = warp_list()
+    if domains:
+        rules.append({"domain": domains, "balancerTag": "warp-or-direct"})
+    if ips:
+        rules.append({"ip": ips, "balancerTag": "warp-or-direct"})
+    if route == "all":
+        rules.append({"network": "tcp,udp", "balancerTag": "warp-or-direct"})
+    elif not domains and not ips:
+        die(f"WARP_ROUTE=domains, но список пуст: {env('WARP_DOMAINS_FILE', '')} "
+            "(пример — warp-domains.example.txt)")
+    return rules
+
+
+def build_warp_test():
+    return {
+        "log": {"loglevel": "warning"},
+        "inbounds": [{"tag": "socks", "listen": "127.0.0.1", "port": 10898, "protocol": "socks",
+                      "settings": {"udp": False}}],
+        "outbounds": [warp_outbound()],
     }
 
 
@@ -619,6 +725,8 @@ def main(argv):
         data["users"].append({"name": name, "id": uid, "sid": new_sid(), "enabled": True,
                               "created": int(time.time())})
         save(USERS, data)
+    elif cmd == "warp-test-config":
+        print(json.dumps(build_warp_test(), indent=2, ensure_ascii=False))
     elif cmd == "rotate-sids":
         data = load(USERS, {"users": []})
         for u in data["users"]:

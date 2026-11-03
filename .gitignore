@@ -3,3 +3,4 @@ config.env
 *.tar.gz
 *.gpg
 split-exclude.txt
+warp-domains.txt

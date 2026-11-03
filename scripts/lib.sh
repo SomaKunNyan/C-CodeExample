@@ -50,6 +50,8 @@ load_config() {
     : "${BLOCK_BITTORRENT:=yes}" "${XRAY_ACCESS_LOG:=no}" "${CLIENT_DIRECT_RU:=yes}"
     : "${REALITY_MIRROR_PORTS:=no}" "${ENC_ENABLE:=no}" "${ENC_PORT:=47443}" "${ENC_MODE:=random}"
     : "${REALITY_MAX_TIME_DIFF:=60000}"
+    : "${WARP_ENABLE:=no}" "${WARP_ROUTE:=domains}" "${WARP_DOMAINS_FILE:=${PROJECT_DIR}/warp-domains.txt}" "${WARP_RESERVED:=}"
+    case "${WARP_ROUTE}" in domains|all) ;; *) die "WARP_ROUTE=${WARP_ROUTE}: допустимо domains или all." ;; esac
     : "${MASK_ENABLE:=no}" "${MASK_PORT:=46443}" "${MASK_ASCII:=prefer_ascii}" "${FRAG_LENGTH:=100-200}" "${FRAG_DELAY:=10-20}"
     : "${XRAY_LOGLEVEL:=warning}" "${PUBLIC_IPV4:=}" "${LINK_ADDRESS:=ip}"
     : "${XRAY_TRANSPORT:=xhttp}" "${XHTTP_MODE:=auto}" "${XHTTP_PATH:=}"
@@ -118,7 +120,7 @@ load_config() {
            XRAY_TRANSPORT XHTTP_MODE XHTTP_PATH REALITY_SELF_SITE ACME_EMAIL SELF_SITE_PORT SITE_TITLE \
            CDN_ENABLE CDN_DOMAIN CDN_XRAY_PORT CDN_PATH REALITY_MIRROR_PORTS \
            ENC_ENABLE ENC_PORT ENC_MODE MASK_ENABLE MASK_PORT MASK_ASCII FRAG_LENGTH FRAG_DELAY \
-           REALITY_MAX_TIME_DIFF
+           REALITY_MAX_TIME_DIFF WARP_ENABLE WARP_ROUTE WARP_DOMAINS_FILE WARP_RESERVED
 }
 
 # Резервная копия файла перед перезаписью.

@@ -1,0 +1,17 @@
+# Сайты, которые сервер открывает через Cloudflare WARP (WARP_ROUTE="domains").
+# Скопируйте: cp warp-domains.example.txt warp-domains.txt — и отредактируйте.
+#
+# Формат — по одной записи в строке:
+#   example.com          домен со всеми поддоменами
+#   full:www.example.com только это имя
+#   geosite:netflix      готовый список доменов из geosite.dat
+#   203.0.113.0/24       сеть;  geoip:XX — страна или список из geoip.dat
+# Несуществующий тег geosite/geoip не даст применить конфиг (03-install-vpn.sh скажет).
+
+# ИИ-сервисы, которые часто не пускают адреса хостингов
+geosite:openai
+gemini.google.com
+
+# Стриминг
+geosite:netflix
+geosite:spotify
