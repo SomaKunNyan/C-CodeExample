@@ -5,11 +5,13 @@
 #    vpn-user.sh link <user> [вариант] — снова показать ссылки + QR-коды (все включённые
 #                                        или одну: cdn, enc, mask, frag)
 #    vpn-user.sh client-config <user> [вариант] — JSON-конфиг Xray для клиента (с исключениями)
-#    vpn-user.sh reset <user>          — новый UUID (старая ссылка перестанет работать)
+#    vpn-user.sh reset <user>          — новый UUID и shortId (старая ссылка перестанет работать)
 #    vpn-user.sh lock <user>           — заблокировать (сразу отключает)
 #    vpn-user.sh unlock <user>         — разблокировать
 #    vpn-user.sh del <user>            — удалить
 #    vpn-user.sh list                  — пользователи, трафик, кто онлайн и с каких IP
+#    vpn-user.sh rotate-keys           — новые ключи REALITY и shortId всем; показывает новые
+#                                        ссылки (все прежние, кроме enc, перестают работать)
 #    vpn-user.sh selftest <user> [вариант] — подключиться к серверу с ключами
 #                                        пользователя прямо с сервера (проверка без
 #                                        телефона и сети); cdn — через CDN (полный путь
@@ -130,6 +132,30 @@ case "$cmd" in
         ;;
     list)
         XRAY_BIN="${XRAY_BIN}" xray_py list
+        ;;
+    rotate-keys)
+        # Плановая смена ключей REALITY: новая пара x25519, новые shortId у всех пользователей.
+        # Пути XHTTP и CDN (если не заданы явно) и пароль маски выводятся из ключей —
+        # меняются тоже. Ключи VLESS Encryption не трогаются.
+        warn "Все ссылки, кроме VLESS Encryption (enc), перестанут работать — пользователям нужны новые."
+        if [[ -t 0 ]]; then
+            read -r -p "Сменить ключи? Введите 'yes': " ans
+            [[ ${ans} == yes ]] || die "Отменено."
+        fi
+        backup_file "${XRAY_STORE}/keys.json"
+        backup_file "${XRAY_STORE}/users.json"
+        reality_new_keys
+        xray_py rotate-sids
+        xray_apply
+        log "Ключи REALITY сменены (прежние — в ${BACKUP_DIR})."
+        if [[ ${REALITY_SELF_SITE} == yes && ${CDN_ENABLE} == yes ]]; then
+            # Новый путь CDN — в виртуальный хост nginx.
+            bash "${PROJECT_DIR}/scripts/self-site.sh" \
+                || warn "Не удалось обновить виртуальный хост CDN — выполните: sudo ./scripts/03-install-vpn.sh"
+        fi
+        while IFS=$'\t' read -r name enabled _; do
+            [[ ${enabled} == yes ]] && show_link "${name}"
+        done < <(xray_py users)
         ;;
     selftest)
         # Настоящий клиент Xray с параметрами из ссылки пользователя подключается к

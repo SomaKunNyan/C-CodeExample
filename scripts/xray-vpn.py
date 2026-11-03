@@ -2,15 +2,16 @@
 """Генератор конфигураций Xray (VLESS + REALITY + XTLS Vision).
 
 Хранилище (по умолчанию /etc/xray):
-    keys.json   — ключи REALITY (privateKey, publicKey) и shortIds сервера,
+    keys.json   — ключи REALITY (privateKey, publicKey) и общий shortId сервера,
                   ключи VLESS Encryption (encServerKey, encClientKey)
-    users.json  — пользователи: name, id (UUID), enabled, created
+    users.json  — пользователи: name, id (UUID), sid (свой shortId REALITY), enabled, created
     config.json — конфигурация сервера (генерируется командой `server`)
 
 Параметры сервера берутся из переменных окружения (их экспортирует lib.sh
 из config.env): XRAY_PORT, REALITY_DEST, REALITY_SERVER_NAMES, VPN_DOMAIN,
 WAN_IPV4, WAN_IPV6, BLOCK_BITTORRENT, XRAY_ACCESS_LOG, XRAY_LOGLEVEL, XRAY_API_PORT,
 CLIENT_FINGERPRINT, SPLIT_EXCLUDE_FILE, CLIENT_DIRECT_RU, PUBLIC_IPV4, LINK_ADDRESS,
+REALITY_MAX_TIME_DIFF,
 XRAY_TRANSPORT (xhttp | vision), XHTTP_PATH, XHTTP_MODE,
 CDN_ENABLE, CDN_DOMAIN, CDN_XRAY_PORT, CDN_PATH, ENC_ENABLE, ENC_PORT, ENC_MODE,
 MASK_ENABLE, MASK_PORT, MASK_ASCII, FRAG_LENGTH, FRAG_DELAY.
@@ -18,7 +19,8 @@ MASK_ENABLE, MASK_PORT, MASK_ASCII, FRAG_LENGTH, FRAG_DELAY.
 Команды:
     server                      конфиг сервера -> stdout
     users                       список пользователей (TSV: name enabled created id)
-    add NAME UUID               добавить пользователя
+    add NAME UUID               добавить пользователя (со своим shortId)
+    rotate-sids                 новые shortId всем пользователям (после смены ключей)
     set NAME enabled|disabled   включить/выключить
     del NAME                    удалить
     link NAME [VARIANT]         ссылка vless:// для клиента; VARIANT:
@@ -35,6 +37,7 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -95,6 +98,21 @@ def keys():
     if not k:
         die(f"нет {KEYS}: сначала запустите scripts/03-install-vpn.sh")
     return k
+
+
+def new_sid():
+    return secrets.token_hex(8)
+
+
+def server_short_ids():
+    """shortId, которые принимает сервер: свои у включённых пользователей. Общий shortId
+    из keys.json — только пока есть пользователи без своего (созданные до появления
+    личных shortId): их прежние ссылки продолжают работать до reset / rotate-keys."""
+    all_users = users()
+    sids = [u["sid"] for u in all_users if u.get("enabled", True) and u.get("sid")]
+    if not sids or any(not u.get("sid") for u in all_users):
+        sids += keys()["shortIds"]
+    return sorted(set(sids))
 
 
 def server_names():
@@ -292,7 +310,11 @@ def reality_inbound(clients, k, tag, port, finalmask=None):
             "xver": 0,
             "serverNames": server_names(),
             "privateKey": k["privateKey"],
-            "shortIds": k["shortIds"],
+            "shortIds": server_short_ids(),
+            # Защита от повтора записанного ClientHello: метка времени клиента должна
+            # отличаться от часов сервера не больше чем на столько мс, иначе соединение
+            # уходит на сайт-маскировку, как у постороннего. 0 — без проверки.
+            "maxTimeDiff": int(env("REALITY_MAX_TIME_DIFF", "60000")),
         },
         "sockopt": {"tcpFastOpen": True},
     }
@@ -376,7 +398,8 @@ def client_params(u):
         "id": u["id"],
         "sni": server_names()[0],
         "pbk": k["publicKey"],
-        "sid": k["shortIds"][0],
+        # Свой shortId пользователя; у созданных до их появления — общий.
+        "sid": u.get("sid") or k["shortIds"][0],
         "fp": env("CLIENT_FINGERPRINT", "chrome"),
     }
 
@@ -593,7 +616,13 @@ def main(argv):
         data = load(USERS, {"users": []})
         if any(u["name"] == name for u in data["users"]):
             die(f"пользователь {name} уже существует")
-        data["users"].append({"name": name, "id": uid, "enabled": True, "created": int(time.time())})
+        data["users"].append({"name": name, "id": uid, "sid": new_sid(), "enabled": True,
+                              "created": int(time.time())})
+        save(USERS, data)
+    elif cmd == "rotate-sids":
+        data = load(USERS, {"users": []})
+        for u in data["users"]:
+            u["sid"] = new_sid()
         save(USERS, data)
     elif cmd == "set":
         name, state = args

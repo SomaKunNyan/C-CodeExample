@@ -49,6 +49,7 @@ load_config() {
     : "${REALITY_DEST:=}" "${REALITY_SERVER_NAMES:=}" "${CLIENT_FINGERPRINT:=chrome}"
     : "${BLOCK_BITTORRENT:=yes}" "${XRAY_ACCESS_LOG:=no}" "${CLIENT_DIRECT_RU:=yes}"
     : "${REALITY_MIRROR_PORTS:=no}" "${ENC_ENABLE:=no}" "${ENC_PORT:=47443}" "${ENC_MODE:=random}"
+    : "${REALITY_MAX_TIME_DIFF:=60000}"
     : "${MASK_ENABLE:=no}" "${MASK_PORT:=46443}" "${MASK_ASCII:=prefer_ascii}" "${FRAG_LENGTH:=100-200}" "${FRAG_DELAY:=10-20}"
     : "${XRAY_LOGLEVEL:=warning}" "${PUBLIC_IPV4:=}" "${LINK_ADDRESS:=ip}"
     : "${XRAY_TRANSPORT:=xhttp}" "${XHTTP_MODE:=auto}" "${XHTTP_PATH:=}"
@@ -61,6 +62,7 @@ load_config() {
     if [[ ${REALITY_MIRROR_PORTS} == yes && ${REALITY_SELF_SITE} == yes ]]; then
         die "REALITY_MIRROR_PORTS=\"yes\" — только для маскировки под чужой сайт; при REALITY_SELF_SITE=\"yes\" порт 80 обслуживает свой nginx."
     fi
+    [[ ${REALITY_MAX_TIME_DIFF} =~ ^[0-9]+$ ]] || die "REALITY_MAX_TIME_DIFF=${REALITY_MAX_TIME_DIFF}: нужно число миллисекунд (0 — без проверки)."
     case "${ENC_MODE}" in random|xorpub|native) ;; *) die "ENC_MODE=${ENC_MODE}: допустимо random, xorpub, native." ;; esac
     case "${MASK_ASCII}" in prefer_ascii|prefer_entropy) ;; *) die "MASK_ASCII=${MASK_ASCII}: допустимо prefer_ascii, prefer_entropy." ;; esac
     # Дополнительные входы на своих портах: номер корректен и не занят другой службой проекта.
@@ -115,7 +117,8 @@ load_config() {
            XRAY_ACCESS_LOG XRAY_LOGLEVEL CLIENT_DIRECT_RU SPLIT_EXCLUDE_FILE PUBLIC_IPV4 LINK_ADDRESS \
            XRAY_TRANSPORT XHTTP_MODE XHTTP_PATH REALITY_SELF_SITE ACME_EMAIL SELF_SITE_PORT SITE_TITLE \
            CDN_ENABLE CDN_DOMAIN CDN_XRAY_PORT CDN_PATH REALITY_MIRROR_PORTS \
-           ENC_ENABLE ENC_PORT ENC_MODE MASK_ENABLE MASK_PORT MASK_ASCII FRAG_LENGTH FRAG_DELAY
+           ENC_ENABLE ENC_PORT ENC_MODE MASK_ENABLE MASK_PORT MASK_ASCII FRAG_LENGTH FRAG_DELAY \
+           REALITY_MAX_TIME_DIFF
 }
 
 # Резервная копия файла перед перезаписью.
@@ -165,6 +168,25 @@ require_reality() {
 XRAY_BIN=/usr/local/bin/xray
 XRAY_STORE=/etc/xray
 export XRAY_STORE
+
+# Новая пара ключей REALITY (x25519) и общий shortId в keys.json. Остальные поля
+# (ключи VLESS Encryption) сохраняются.
+reality_new_keys() {
+    local keyout priv pub sid base tmp
+    keyout="$("${XRAY_BIN}" x25519)"
+    priv="$(awk -F': *' '/^PrivateKey/{print $2}' <<<"${keyout}")"
+    # Новые версии называют публичный ключ «Password (PublicKey)», старые — «Public key».
+    pub="$(awk -F': *' '/^(Password|Public)/{print $2}' <<<"${keyout}" | head -n1)"
+    [[ -n ${priv} && -n ${pub} ]] || die "Не удалось разобрать вывод 'xray x25519': ${keyout}"
+    sid="$(openssl rand -hex 8)"
+    base='{}'
+    [[ -s ${XRAY_STORE}/keys.json ]] && base="$(cat "${XRAY_STORE}/keys.json")"
+    tmp="$(mktemp "${XRAY_STORE}/keys.XXXXXX")"
+    jq --arg priv "${priv}" --arg pub "${pub}" --arg sid "${sid}" \
+        '. + {privateKey: $priv, publicKey: $pub, shortIds: [$sid]}' <<<"${base}" > "${tmp}"
+    chmod 0600 "${tmp}"
+    mv -f "${tmp}" "${XRAY_STORE}/keys.json"
+}
 
 xray_py() { python3 "${PROJECT_DIR}/scripts/xray-vpn.py" "$@"; }
 

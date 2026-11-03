@@ -62,18 +62,10 @@ getent passwd xray >/dev/null || useradd --system --gid xray --no-create-home \
 install -d -m 0750 -o root -g xray "${XRAY_STORE}"
 
 # --- 2. Ключи REALITY ---------------------------------------------------------
+# Ключи создаются один раз; сменить — vpn-user.sh rotate-keys.
 if [[ ! -s ${XRAY_STORE}/keys.json ]]; then
     log "Генерация ключей REALITY (x25519) и shortId"
-    keyout="$("${XRAY_BIN}" x25519)"
-    priv="$(awk -F': *' '/^PrivateKey/{print $2}' <<<"${keyout}")"
-    # Новые версии называют публичный ключ «Password (PublicKey)», старые — «Public key».
-    pub="$(awk -F': *' '/^(Password|Public)/{print $2}' <<<"${keyout}" | head -n1)"
-    [[ -n ${priv} && -n ${pub} ]] || die "Не удалось разобрать вывод 'xray x25519': ${keyout}"
-    sid="$(openssl rand -hex 8)"
-    umask 077
-    jq -n --arg priv "${priv}" --arg pub "${pub}" --arg sid "${sid}" \
-        '{privateKey: $priv, publicKey: $pub, shortIds: [$sid]}' > "${XRAY_STORE}/keys.json"
-    umask 022
+    reality_new_keys
 fi
 # Ключи VLESS Encryption (ENC_ENABLE): пара X25519 из `xray vlessenc` — сервер
 # аутентифицируется ей, обмен ключами сессии — ML-KEM-768 + X25519 (постквантовый).
